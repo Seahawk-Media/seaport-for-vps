@@ -10,8 +10,8 @@ Thank you for your interest in contributing! Here's how to get started.
 
 ### 1. Fork & clone
 ```bash
-git clone https://github.com/Seahawk-Media/seaport-for-vps.git
-cd seaport-for-vps
+git clone https://github.com/Seahawk-Media/seaport.git
+cd seaport
 npm install
 ```
 
@@ -41,7 +41,7 @@ npm run dev
 ## Project Structure
 
 ```
-seaport-for-vps/
+seaport/
 ├── server/
 │   ├── db/
 │   │   ├── schema/          # Drizzle ORM schema (13 files, 30+ tables)

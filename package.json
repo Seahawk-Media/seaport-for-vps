@@ -1,18 +1,18 @@
 {
-  "name": "seaport-for-vps",
+  "name": "seaport",
   "private": true,
   "version": "0.1.0",
   "description": "The open-source Org OS for VPS — AI agents, org structure, and HR tools, self-hosted in 60 seconds.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Seahawk-Media/seaport-for-vps"
+    "url": "https://github.com/Seahawk-Media/seaport"
   },
   "keywords": ["org-os", "self-hosted", "ai-agents", "vps", "employee-management", "open-source"],
   "author": "Seahawk Media",
   "license": "MIT",
-  "homepage": "https://github.com/Seahawk-Media/seaport-for-vps#readme",
+  "homepage": "https://github.com/Seahawk-Media/seaport#readme",
   "bugs": {
-    "url": "https://github.com/Seahawk-Media/seaport-for-vps/issues"
+    "url": "https://github.com/Seahawk-Media/seaport/issues"
   },
   "type": "module",
   "scripts": {

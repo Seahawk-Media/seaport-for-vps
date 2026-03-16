@@ -33,4 +33,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker Compose deployment with PostgreSQL and app containers
 - One-command `deploy.sh` for production VPS deployment
 
-[0.1.0]: https://github.com/Seahawk-Media/seaport-for-vps/releases/tag/v0.1.0
+[0.1.0]: https://github.com/Seahawk-Media/seaport/releases/tag/v0.1.0
