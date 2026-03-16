@@ -124,7 +124,7 @@ The fastest way to get Seaport running on a VPS.
 **Prerequisites:** Ubuntu 22.04+, Docker, a domain pointed at your server.
 
 ```bash
-git clone https://github.com/seahawkmedia/seaport-for-vps.git
+git clone https://github.com/Seahawk-Media/seaport-for-vps.git
 cd seaport-for-vps
 chmod +x deploy.sh
 ./deploy.sh
@@ -154,7 +154,7 @@ The wizard asks 2 questions (domain + app name), then:
 #### 1. Clone the repo
 
 ```bash
-git clone https://github.com/seahawkmedia/seaport-for-vps.git
+git clone https://github.com/Seahawk-Media/seaport-for-vps.git
 cd seaport-for-vps
 ```
 

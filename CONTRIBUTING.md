@@ -10,7 +10,7 @@ Thank you for your interest in contributing! Here's how to get started.
 
 ### 1. Fork & clone
 ```bash
-git clone https://github.com/seahawkmedia/seaport-for-vps.git
+git clone https://github.com/Seahawk-Media/seaport-for-vps.git
 cd seaport-for-vps
 npm install
 ```

@@ -202,7 +202,7 @@ export const AuthPage = () => {
 
           <p className="text-center text-xs text-muted-foreground">
             Open source & self-hostable.{' '}
-            <a href="https://github.com/seahawkmedia/seaport-for-vps" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">View on GitHub</a>
+            <a href="https://github.com/Seahawk-Media/seaport-for-vps" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">View on GitHub</a>
           </p>
         </div>
       </div>
