@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Search, Building2, Users, Settings, Eye, GitBranch, Crown, Calendar, Clock, Trophy, Heart, TrendingUp, User } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useRole } from "@/hooks/useRole";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -21,31 +21,31 @@ import { ChevronRight } from "lucide-react";
 
 interface ProfileWithOrg {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
-  avatar_url: string | null;
+  avatarUrl: string | null;
   status: string | null;
   location: string | null;
-  manager_id: string | null;
+  managerId: string | null;
   manager?: {
     id: string;
-    full_name: string;
+    fullName: string;
   } | null;
   department: {
     id: string;
     name: string;
-    parent_department?: {
+    parentDepartment?: {
       name: string;
     } | null;
   } | null;
-  position_role: {
+  positionRole: {
     id: string;
     title: string;
   } | null;
-  user_roles: Array<{
+  userRoles: Array<{
     role: string;
-  }> | any;
-  team_memberships: Array<{
+  }>;
+  teamMemberships: Array<{
     team: {
       id: string;
       name: string;
@@ -60,15 +60,15 @@ interface Department {
   id: string;
   name: string;
   description: string | null;
-  parent_id: string | null;
-  head_id: string | null;
+  parentId: string | null;
+  headId: string | null;
 }
 
 interface Team {
   id: string;
   name: string;
   description: string | null;
-  team_type: string;
+  teamType: string;
 }
 
 interface EnhancedOrgChartProps {
@@ -86,10 +86,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
   onAdminSettingsClick,
   onSignOut
 }) => {
-  const [employees, setEmployees] = useState<ProfileWithOrg[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [selectedTeam, setSelectedTeam] = useState<string>('');
@@ -102,134 +98,88 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
   const { user } = useAuth();
   const { toast } = useToast();
 
+  // Fetch all data via tRPC
+  const { data: profilesRaw, isLoading: profilesLoading } = trpc.profiles.list.useQuery();
+  const { data: departmentsRaw, isLoading: deptsLoading } = trpc.departments.list.useQuery();
+  const { data: teamsRaw, isLoading: teamsLoading } = trpc.teams.list.useQuery();
+  const { data: positionsRaw } = trpc.positions.listRoles.useQuery();
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, { enabled: !!user });
+
+  const loading = profilesLoading || deptsLoading || teamsLoading;
+
+  const departments: Department[] = (departmentsRaw || []).map((d) => ({
+    id: d.id,
+    name: d.name,
+    description: d.description ?? null,
+    parentId: d.parentId ?? null,
+    headId: d.headId ?? null,
+  }));
+
+  const teams: Team[] = (teamsRaw || []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description ?? null,
+    teamType: t.teamType || '',
+  }));
+
+  // Build enriched employee list
+  const employees: ProfileWithOrg[] = React.useMemo(() => {
+    if (!profilesRaw) return [];
+
+    const profiles = profilesRaw as Array<Record<string, unknown>>;
+    const deptById = new Map(departments.map(d => [d.id, d]));
+    const deptNameById = new Map(departments.map(d => [d.id, d.name]));
+    const posById = new Map((positionsRaw || []).map((p) => [p.id, p]));
+    const teamById = new Map(teams.map(t => [t.id, t]));
+    const profileBasicById = new Map(profiles.map(p => [p.id, { id: p.id, fullName: p.fullName }]));
+
+    // Build team memberships from teamMembers data embedded in profiles or fetched separately
+    // Since we don't have a bulk teamMembers query, we'll use what's available in profiles
+    const membershipsByProfile = new Map<string, Array<{ team: { id: string; name: string }; role: string }>>();
+
+    return profiles.map((employee) => {
+      const departmentHeadOf = departments.filter(dept => dept.headId === employee.id);
+      const teamLeadOf = teams.filter((team) => (team as Record<string, unknown>).teamLeadId === employee.id);
+
+      const managerData = employee.managerId ? (profileBasicById.get(employee.managerId) || null) : null;
+      const dept = employee.departmentId ? deptById.get(employee.departmentId) : null;
+      const position = employee.positionId ? posById.get(employee.positionId) : null;
+
+      return {
+        id: employee.id,
+        fullName: employee.fullName || '',
+        email: employee.email || '',
+        avatarUrl: employee.avatarUrl ?? null,
+        status: employee.status ?? null,
+        location: employee.location ?? null,
+        managerId: employee.managerId ?? null,
+        manager: managerData,
+        department: dept
+          ? {
+              id: dept.id,
+              name: dept.name,
+              parentDepartment: dept.parentId ? { name: deptNameById.get(dept.parentId) || 'Unknown' } : null
+            }
+          : null,
+        positionRole: position ? { id: position.id, title: position.title } : null,
+        userRoles: employee.userRoles || [],
+        teamMemberships: employee.teamMemberships || membershipsByProfile.get(employee.id) || [],
+        departmentHeadOf,
+        teamLeadOf
+      } as ProfileWithOrg;
+    });
+  }, [profilesRaw, departments, teams, positionsRaw]);
+
+  // Set current user profile
   useEffect(() => {
-    fetchData();
-    fetchCurrentUserProfile();
-  }, []);
-
-  const fetchCurrentUserProfile = async () => {
-    if (!user) return;
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single();
-
-    if (profile) {
-      setCurrentUserProfileId(profile.id);
-    }
-  };
-
-  const fetchData = async () => {
-    try {
-      // Avoid relational-select FK-hint joins here (they can break when the schema cache is stale).
-      // Instead, fetch base tables and stitch the objects together client-side.
-      const [profilesRes, departmentsRes, teamsRes, positionsRes, teamMembersRes] = await Promise.all([
-        supabase.from('profiles').select('*').order('full_name'),
-        supabase.from('departments').select('*').order('name'),
-        supabase.from('teams').select('*').order('name'),
-        supabase.from('position_roles').select('id, title').order('title'),
-        supabase.from('team_members').select('profile_id, team_id, role')
-      ]);
-
-      if (profilesRes.error) throw profilesRes.error;
-      if (departmentsRes.error) throw departmentsRes.error;
-      if (teamsRes.error) throw teamsRes.error;
-      if (positionsRes.error) throw positionsRes.error;
-      if (teamMembersRes.error) throw teamMembersRes.error;
-
-      const departments = departmentsRes.data || [];
-      const teams = teamsRes.data || [];
-      const profiles = profilesRes.data || [];
-
-      const deptById = new Map(departments.map(d => [d.id, d]));
-      const deptNameById = new Map(departments.map(d => [d.id, d.name]));
-      const posById = new Map((positionsRes.data || []).map(p => [p.id, p]));
-      const teamById = new Map(teams.map(t => [t.id, t]));
-      const profileBasicById = new Map(
-        profiles.map(p => [p.id, { id: p.id, full_name: p.full_name }])
-      );
-
-      const membershipsByProfile = new Map<string, Array<{ team: { id: string; name: string }; role: string }>>();
-      (teamMembersRes.data || []).forEach((tm) => {
-        const team = teamById.get(tm.team_id);
-        if (!team) return;
-        const existing = membershipsByProfile.get(tm.profile_id) || [];
-        existing.push({ team: { id: team.id, name: team.name }, role: tm.role });
-        membershipsByProfile.set(tm.profile_id, existing);
-      });
-
-      // Fetch user roles separately and merge (per-user to respect RLS)
-      const employeesWithRoles = await Promise.all(
-        profiles.map(async (employee) => {
-          const { data: userRoles } = await supabase
-            .from('user_roles')
-            .select('role')
-            .eq('user_id', employee.user_id);
-
-          return {
-            ...employee,
-            user_roles: userRoles || []
-          };
-        })
-      );
-
-      const employeesWithLeadership = employeesWithRoles.map((employee) => {
-        const departmentHeadOf = departments.filter(dept => dept.head_id === employee.id);
-        const teamLeadOf = teams.filter(team => team.team_lead_id === employee.id);
-
-        const managerData = employee.manager_id ? (profileBasicById.get(employee.manager_id) || null) : null;
-        const dept = employee.department_id ? deptById.get(employee.department_id) : null;
-        const position = employee.position_id ? posById.get(employee.position_id) : null;
-
-        return {
-          ...employee,
-          manager: managerData,
-          department: dept
-            ? {
-                id: dept.id,
-                name: dept.name,
-                parent_department: dept.parent_id ? { name: deptNameById.get(dept.parent_id) || 'Unknown' } : null
-              }
-            : null,
-          position_role: position ? { id: position.id, title: position.title } : null,
-          team_memberships: membershipsByProfile.get(employee.id) || [],
-          departmentHeadOf,
-          teamLeadOf
-        };
-      }) as ProfileWithOrg[];
-
-      setEmployees(employeesWithLeadership);
-      setDepartments(departments);
-      setTeams(teams);
-      
-      // Set current user data from the employees list
-      if (user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
-        
-        if (profile) {
-          const currentUserData = employeesWithLeadership.find(emp => emp.id === profile.id);
-          if (currentUserData) {
-            setCurrentUser(currentUserData as ProfileWithOrg);
-          }
-        }
+    if (myProfile) {
+      setCurrentUserProfileId(myProfile.id);
+      const currentUserData = employees.find(emp => emp.id === myProfile.id);
+      if (currentUserData) {
+        setCurrentUser(currentUserData);
       }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch organizational data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [myProfile, employees]);
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
@@ -287,79 +237,23 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
 
   const filterEmployees = (employees: ProfileWithOrg[]) => {
     return employees.filter(employee => {
-      const matchesSearch = searchTerm === '' || 
-        employee.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      const matchesSearch = searchTerm === '' ||
+        employee.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         employee.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (employee.position_role?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
+        (employee.positionRole?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       if (viewMode === 'departments') {
-        const matchesDepartment = selectedDepartment === 'none' || selectedDepartment === '' || 
+        const matchesDepartment = selectedDepartment === 'none' || selectedDepartment === '' ||
           employee.department?.id === selectedDepartment;
         return matchesSearch && matchesDepartment;
       } else if (viewMode === 'teams') {
-        const matchesTeam = selectedTeam === 'none' || selectedTeam === '' || 
-          employee.team_memberships.some(tm => tm.team.id === selectedTeam);
+        const matchesTeam = selectedTeam === 'none' || selectedTeam === '' ||
+          employee.teamMemberships.some(tm => tm.team.id === selectedTeam);
         return matchesSearch && matchesTeam;
       } else {
-        return matchesSearch; // hierarchy view shows all that match search
+        return matchesSearch;
       }
     });
-  };
-
-  const groupByDepartment = (employees: ProfileWithOrg[]) => {
-    const grouped: { [key: string]: ProfileWithOrg[] } = {};
-    
-    employees.forEach(employee => {
-      const deptName = employee.department?.name || 'Unassigned';
-      if (!grouped[deptName]) {
-        grouped[deptName] = [];
-      }
-      grouped[deptName].push(employee);
-    });
-
-    return grouped;
-  };
-
-  const groupByTeam = (employees: ProfileWithOrg[]) => {
-    const grouped: { [key: string]: ProfileWithOrg[] } = {};
-    
-    employees.forEach(employee => {
-      if (employee.team_memberships.length === 0) {
-        if (!grouped['No Teams']) {
-          grouped['No Teams'] = [];
-        }
-        grouped['No Teams'].push(employee);
-      } else {
-        // If a specific team is selected, only show that team
-        if (selectedTeam && selectedTeam !== 'none' && selectedTeam !== '') {
-          const selectedMembership = employee.team_memberships.find(tm => tm.team.id === selectedTeam);
-          if (selectedMembership) {
-            const teamName = selectedMembership.team.name;
-            if (!grouped[teamName]) {
-              grouped[teamName] = [];
-            }
-            grouped[teamName].push({
-              ...employee,
-              teamRole: selectedMembership.role
-            } as ProfileWithOrg & { teamRole: string });
-          }
-        } else {
-          // If no specific team selected, show all teams
-          employee.team_memberships.forEach(membership => {
-            const teamName = membership.team.name;
-            if (!grouped[teamName]) {
-              grouped[teamName] = [];
-            }
-            grouped[teamName].push({
-              ...employee,
-              teamRole: membership.role
-            } as ProfileWithOrg & { teamRole: string });
-          });
-        }
-      }
-    });
-
-    return grouped;
   };
 
   const buildHierarchy = (employees: ProfileWithOrg[]) => {
@@ -370,8 +264,8 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
       const empWithReports = employeeMap.get(employee.id);
       if (!empWithReports) return;
 
-      if (employee.manager_id && employeeMap.has(employee.manager_id)) {
-        const manager = employeeMap.get(employee.manager_id);
+      if (employee.managerId && employeeMap.has(employee.managerId)) {
+        const manager = employeeMap.get(employee.managerId);
         manager?.directReports.push(empWithReports);
       } else {
         topLevel.push(empWithReports);
@@ -383,23 +277,23 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
 
   const renderHierarchyNode = (employee: ProfileWithOrg & { directReports: ProfileWithOrg[] }, level: number = 0) => {
     const indentClass = level > 0 ? `ml-${Math.min(level * 4, 16)}` : '';
-    
+
     return (
       <div key={employee.id} className="space-y-2">
-        <Card className={`hover:shadow-md transition-shadow cursor-pointer ${indentClass}`} 
+        <Card className={`hover:shadow-md transition-shadow cursor-pointer ${indentClass}`}
               onClick={() => onEmployeeClick?.(employee)}>
           <CardContent className="p-3">
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Avatar className="h-10 w-10">
-                  <AvatarImage src={employee.avatar_url || ''} />
-                  <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                  <AvatarImage src={employee.avatarUrl || ''} />
+                  <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                 </Avatar>
                 <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                  <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                   {employee.directReports.length > 0 && (
                     <Badge variant="outline" className="text-xs">
                       {employee.directReports.length} reports
@@ -407,9 +301,9 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
-                {employee.position_role && (
+                {employee.positionRole && (
                   <Badge variant="outline" className="text-xs mt-1">
-                    {employee.position_role.title}
+                    {employee.positionRole.title}
                   </Badge>
                 )}
                 {employee.department && (
@@ -422,7 +316,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
         {employee.directReports.length > 0 && (
           <div className="space-y-2">
             {employee.directReports
-              .sort((a, b) => a.full_name.localeCompare(b.full_name))
+              .sort((a, b) => a.fullName.localeCompare(b.fullName))
               .map(report => renderHierarchyNode({ ...report, directReports: [] }, level + 1))}
           </div>
         )}
@@ -432,17 +326,15 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
 
   const filteredEmployees = filterEmployees(employees);
 
-  // In the UI, we want departments/teams to appear even when they have 0 members.
-  // The previous grouping helpers only returned groups that had at least one employee.
   const departmentSections = (() => {
     const base = departments
       .map((dept) => {
-        const head = dept.head_id ? employees.find(e => e.id === dept.head_id) : null;
+        const head = dept.headId ? employees.find(e => e.id === dept.headId) : null;
         return {
           id: dept.id,
           name: dept.name,
-          head_id: dept.head_id,
-          head: head ? { id: head.id, full_name: head.full_name, avatar_url: head.avatar_url } : null,
+          headId: dept.headId,
+          head: head ? { id: head.id, fullName: head.fullName, avatarUrl: head.avatarUrl } : null,
           employees: filteredEmployees.filter((e) => e.department?.id === dept.id),
         };
       })
@@ -461,7 +353,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
       .map((team) => ({
         id: team.id,
         name: team.name,
-        employees: filteredEmployees.filter((e) => e.team_memberships.some((tm) => tm.team.id === team.id)),
+        employees: filteredEmployees.filter((e) => e.teamMemberships.some((tm) => tm.team.id === team.id)),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -469,11 +361,10 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
       ? base.filter((t) => t.id === selectedTeam)
       : base;
 
-    const noTeams = filteredEmployees.filter((e) => e.team_memberships.length === 0);
+    const noTeams = filteredEmployees.filter((e) => e.teamMemberships.length === 0);
     return { teams: scoped, noTeams };
   })();
 
-  // Handle view mode changes - show separate UI for my-journey
   useEffect(() => {
     if (viewMode === 'my-journey' && currentUserProfileId) {
       setShowMyJourney(true);
@@ -486,7 +377,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
     return <div className="flex justify-center items-center h-64">Loading organizational chart...</div>;
   }
 
-  // Show separate EmployeeJourney UI when My Journey is selected
   if (showMyJourney && currentUserProfileId) {
     return (
       <EmployeeJourney
@@ -496,7 +386,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
     );
   }
 
-  // Show Department Dashboard when a department is selected
   if (departmentDashboardId) {
     return (
       <DepartmentDashboard
@@ -514,7 +403,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
     <SidebarProvider>
       <div className="min-h-screen flex w-full">
         <AppSidebar viewMode={viewMode} />
-        
+
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Top Navbar */}
           <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-50 px-6 py-3">
@@ -630,7 +519,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                     <div className="space-y-6">
                       {departmentSections.departments.map(({ id, name, head, employees: deptEmployees }) => (
                         <div key={id} className="space-y-4">
-                          <div 
+                          <div
                             className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 p-2 rounded-lg -ml-2 transition-colors group"
                             onClick={() => window.location.href = `/department/${id}`}
                           >
@@ -640,7 +529,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                             {head && (
                               <div className="flex items-center gap-1 ml-2">
                                 <Crown className="h-4 w-4 text-yellow-500" />
-                                <span className="text-sm text-muted-foreground">{head.full_name}</span>
+                                <span className="text-sm text-muted-foreground">{head.fullName}</span>
                               </div>
                             )}
                             <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -651,7 +540,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                           ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                               {deptEmployees
-                                .sort((a, b) => a.full_name.localeCompare(b.full_name))
+                                .sort((a, b) => a.fullName.localeCompare(b.fullName))
                                 .map((employee) => (
                                   <Card
                                     key={employee.id}
@@ -662,8 +551,8 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                                       <div className="flex items-center gap-3">
                                         <div className="relative">
                                           <Avatar className="h-12 w-12">
-                                            <AvatarImage src={employee.avatar_url || ''} />
-                                            <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                                            <AvatarImage src={employee.avatarUrl || ''} />
+                                            <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                                           </Avatar>
                                           <div
                                             className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`}
@@ -671,23 +560,23 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                                         </div>
                                         <div className="flex-1 min-w-0">
                                           <div className="flex items-center gap-1">
-                                            <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                                            <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                                             {(employee.departmentHeadOf && employee.departmentHeadOf.length > 0) && (
                                               <Crown className="h-4 w-4 text-yellow-500 flex-shrink-0" />
                                             )}
                                           </div>
                                           <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
-                                          {employee.position_role && (
+                                          {employee.positionRole && (
                                             <Badge variant="outline" className="text-xs mt-1">
-                                              {employee.position_role.title}
+                                              {employee.positionRole.title}
                                             </Badge>
                                           )}
                                           {employee.location && (
                                             <p className="text-xs text-muted-foreground mt-1">{employee.location}</p>
                                           )}
-                                          {employee.team_memberships.length > 0 && (
+                                          {employee.teamMemberships.length > 0 && (
                                             <div className="flex gap-1 mt-1 flex-wrap">
-                                              {employee.team_memberships.map((tm, idx) => (
+                                              {employee.teamMemberships.map((tm, idx) => (
                                                 <Badge key={idx} variant="secondary" className="text-xs">
                                                   {tm.team.name}
                                                 </Badge>
@@ -714,7 +603,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                               {departmentSections.unassigned
-                                .sort((a, b) => a.full_name.localeCompare(b.full_name))
+                                .sort((a, b) => a.fullName.localeCompare(b.fullName))
                                 .map((employee) => (
                                   <Card
                                     key={employee.id}
@@ -724,11 +613,11 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                                     <CardContent className="p-4">
                                       <div className="flex items-center gap-3">
                                         <Avatar className="h-12 w-12">
-                                          <AvatarImage src={employee.avatar_url || ''} />
-                                          <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                                          <AvatarImage src={employee.avatarUrl || ''} />
+                                          <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                                         </Avatar>
                                         <div className="flex-1 min-w-0">
-                                          <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                                          <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                                           <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
                                         </div>
                                       </div>
@@ -757,35 +646,35 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                           ) : (
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                             {teamEmployees.map((employee) => (
-                              <Card key={`${employee.id}-${id}`} className="hover:shadow-md transition-shadow cursor-pointer" 
+                              <Card key={`${employee.id}-${id}`} className="hover:shadow-md transition-shadow cursor-pointer"
                                     onClick={() => onEmployeeClick?.(employee)}>
                                 <CardContent className="p-4">
                                   <div className="flex items-center gap-3">
                                     <div className="relative">
                                       <Avatar className="h-12 w-12">
-                                        <AvatarImage src={employee.avatar_url || ''} />
-                                        <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                                        <AvatarImage src={employee.avatarUrl || ''} />
+                                        <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                                       </Avatar>
                                       <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
                                     </div>
                                      <div className="flex-1 min-w-0">
                                        <div className="flex items-center gap-1">
-                                         <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
-                                         {(employee.teamLeadOf && employee.teamLeadOf.some(team => 
-                                           employee.team_memberships.some(tm => tm.team.id === team.id)
+                                         <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
+                                         {(employee.teamLeadOf && employee.teamLeadOf.some(team =>
+                                           employee.teamMemberships.some(tm => tm.team.id === team.id)
                                          )) && (
                                            <Crown className="h-4 w-4 text-yellow-500 flex-shrink-0" />
                                          )}
                                        </div>
                                        <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
-                                       {employee.position_role && (
+                                       {employee.positionRole && (
                                          <Badge variant="outline" className="text-xs mt-1">
-                                           {employee.position_role.title}
+                                           {employee.positionRole.title}
                                          </Badge>
                                        )}
-                                       {(employee as any).teamRole && (
+                                       {(employee as ProfileWithOrg & { teamRole?: string }).teamRole && (
                                          <Badge variant="secondary" className="text-xs mt-1">
-                                           {(employee as any).teamRole}
+                                           {(employee as ProfileWithOrg & { teamRole?: string }).teamRole}
                                          </Badge>
                                        )}
                                        {employee.department && (
@@ -822,11 +711,11 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                                   <CardContent className="p-4">
                                     <div className="flex items-center gap-3">
                                       <Avatar className="h-12 w-12">
-                                        <AvatarImage src={employee.avatar_url || ''} />
-                                        <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                                        <AvatarImage src={employee.avatarUrl || ''} />
+                                        <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                                       </Avatar>
                                       <div className="flex-1 min-w-0">
-                                        <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                                        <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                                         <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
                                       </div>
                                     </div>
@@ -848,7 +737,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                         <Badge variant="secondary">{filteredEmployees.length} employees</Badge>
                       </div>
                       <div className="space-y-4">
-                        {buildHierarchy(filteredEmployees).map(topLevelEmployee => 
+                        {buildHierarchy(filteredEmployees).map(topLevelEmployee =>
                           renderHierarchyNode(topLevelEmployee)
                         )}
                       </div>

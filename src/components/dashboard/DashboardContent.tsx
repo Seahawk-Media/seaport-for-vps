@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
@@ -7,39 +7,37 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Search, Building2, Users, Eye, GitBranch, Crown, Calendar, Clock, Trophy, Heart, TrendingUp, User, ChevronRight, GraduationCap } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
+import { trpc } from "@/lib/trpc";
 import { ManagerPerformanceReviewDashboard } from "@/components/performance/ManagerPerformanceReviewDashboard";
 import { AcademyDashboard } from "@/components/academy/AcademyDashboard";
 import { useNavigate } from 'react-router-dom';
 
 interface ProfileWithOrg {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
-  avatar_url: string | null;
+  avatarUrl: string | null;
   status: string | null;
   location: string | null;
-  manager_id: string | null;
+  managerId: string | null;
+  departmentId: string | null;
+  positionId: string | null;
   manager?: {
     id: string;
-    full_name: string;
+    fullName: string;
   } | null;
   department: {
     id: string;
     name: string;
-    parent_department?: {
+    parentDepartment?: {
       name: string;
     } | null;
   } | null;
-  position_role: {
+  positionRole: {
     id: string;
     title: string;
   } | null;
-  user_roles: Array<{
-    role: string;
-  }> | any;
-  team_memberships: Array<{
+  teamMemberships: Array<{
     team: {
       id: string;
       name: string;
@@ -48,22 +46,6 @@ interface ProfileWithOrg {
   }>;
   departmentHeadOf?: Array<{ id: string; name: string; }>;
   teamLeadOf?: Array<{ id: string; name: string; }>;
-}
-
-interface Department {
-  id: string;
-  name: string;
-  description: string | null;
-  parent_id: string | null;
-  head_id: string | null;
-}
-
-interface Team {
-  id: string;
-  name: string;
-  description: string | null;
-  team_type: string;
-  team_lead_id: string | null;
 }
 
 interface DashboardContentProps {
@@ -76,109 +58,56 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
   onEmployeeClick,
 }) => {
   const navigate = useNavigate();
-  const [employees, setEmployees] = useState<ProfileWithOrg[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [selectedTeam, setSelectedTeam] = useState<string>('');
-  const { toast } = useToast();
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const profilesQuery = trpc.profiles.list.useQuery();
+  const departmentsQuery = trpc.departments.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
+  const positionsQuery = trpc.positions.listRoles.useQuery();
 
-  const fetchData = async () => {
-    try {
-      const [profilesRes, departmentsRes, teamsRes, positionsRes, teamMembersRes] = await Promise.all([
-        supabase.from('profiles').select('*').order('full_name'),
-        supabase.from('departments').select('*').order('name'),
-        supabase.from('teams').select('*').order('name'),
-        supabase.from('position_roles').select('id, title').order('title'),
-        supabase.from('team_members').select('profile_id, team_id, role')
-      ]);
+  const loading = profilesQuery.isLoading || departmentsQuery.isLoading || teamsQuery.isLoading;
 
-      if (profilesRes.error) throw profilesRes.error;
-      if (departmentsRes.error) throw departmentsRes.error;
-      if (teamsRes.error) throw teamsRes.error;
-      if (positionsRes.error) throw positionsRes.error;
-      if (teamMembersRes.error) throw teamMembersRes.error;
+  const departments = departmentsQuery.data || [];
+  const teams = teamsQuery.data || [];
+  const positions = positionsQuery.data || [];
 
-      const departmentsData = departmentsRes.data || [];
-      const teamsData = teamsRes.data || [];
-      const profiles = profilesRes.data || [];
+  const employees: ProfileWithOrg[] = useMemo(() => {
+    const profiles = profilesQuery.data || [];
+    if (!profiles.length) return [];
 
-      const deptById = new Map(departmentsData.map(d => [d.id, d]));
-      const deptNameById = new Map(departmentsData.map(d => [d.id, d.name]));
-      const posById = new Map((positionsRes.data || []).map(p => [p.id, p]));
-      const teamById = new Map(teamsData.map(t => [t.id, t]));
-      const profileBasicById = new Map(
-        profiles.map(p => [p.id, { id: p.id, full_name: p.full_name }])
-      );
+    const deptById = new Map(departments.map((d: any) => [d.id, d]));
+    const deptNameById = new Map(departments.map((d: any) => [d.id, d.name]));
+    const posById = new Map(positions.map((p: any) => [p.id, p]));
+    const profileBasicById = new Map(
+      profiles.map((p: any) => [p.id, { id: p.id, fullName: p.fullName }])
+    );
 
-      const membershipsByProfile = new Map<string, Array<{ team: { id: string; name: string }; role: string }>>();
-      (teamMembersRes.data || []).forEach((tm) => {
-        const team = teamById.get(tm.team_id);
-        if (!team) return;
-        const existing = membershipsByProfile.get(tm.profile_id) || [];
-        existing.push({ team: { id: team.id, name: team.name }, role: tm.role });
-        membershipsByProfile.set(tm.profile_id, existing);
-      });
+    return profiles.map((employee: any) => {
+      const departmentHeadOf = departments.filter((dept: any) => dept.headId === employee.id);
+      const teamLeadOf = teams.filter((team: any) => team.teamLeadId === employee.id);
+      const managerData = employee.managerId ? (profileBasicById.get(employee.managerId) || null) : null;
+      const dept = employee.departmentId ? deptById.get(employee.departmentId) : null;
+      const position = employee.positionId ? posById.get(employee.positionId) : null;
 
-      const employeesWithRoles = await Promise.all(
-        profiles.map(async (employee) => {
-          const { data: userRoles } = await supabase
-            .from('user_roles')
-            .select('role')
-            .eq('user_id', employee.user_id);
-
-          return {
-            ...employee,
-            user_roles: userRoles || []
-          };
-        })
-      );
-
-      const employeesWithLeadership = employeesWithRoles.map((employee) => {
-        const departmentHeadOf = departmentsData.filter(dept => dept.head_id === employee.id);
-        const teamLeadOf = teamsData.filter(team => team.team_lead_id === employee.id);
-
-        const managerData = employee.manager_id ? (profileBasicById.get(employee.manager_id) || null) : null;
-        const dept = employee.department_id ? deptById.get(employee.department_id) : null;
-        const position = employee.position_id ? posById.get(employee.position_id) : null;
-
-        return {
-          ...employee,
-          manager: managerData,
-          department: dept
-            ? {
-                id: dept.id,
-                name: dept.name,
-                parent_department: dept.parent_id ? { name: deptNameById.get(dept.parent_id) || 'Unknown' } : null
-              }
-            : null,
-          position_role: position ? { id: position.id, title: position.title } : null,
-          team_memberships: membershipsByProfile.get(employee.id) || [],
-          departmentHeadOf,
-          teamLeadOf
-        };
-      }) as ProfileWithOrg[];
-
-      setEmployees(employeesWithLeadership);
-      setDepartments(departmentsData);
-      setTeams(teamsData);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch organizational data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+      return {
+        ...employee,
+        manager: managerData,
+        department: dept
+          ? {
+              id: dept.id,
+              name: dept.name,
+              parentDepartment: dept.parentId ? { name: deptNameById.get(dept.parentId) || 'Unknown' } : null
+            }
+          : null,
+        positionRole: position ? { id: position.id, title: position.title } : null,
+        teamMemberships: [],
+        departmentHeadOf,
+        teamLeadOf
+      };
+    });
+  }, [profilesQuery.data, departments, teams, positions]);
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
@@ -195,18 +124,18 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
 
   const filterEmployees = (employees: ProfileWithOrg[]) => {
     return employees.filter(employee => {
-      const matchesSearch = searchTerm === '' || 
-        employee.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      const matchesSearch = searchTerm === '' ||
+        employee.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         employee.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (employee.position_role?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
+        (employee.positionRole?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       if (viewMode === 'departments') {
-        const matchesDepartment = selectedDepartment === 'none' || selectedDepartment === '' || 
+        const matchesDepartment = selectedDepartment === 'none' || selectedDepartment === '' ||
           employee.department?.id === selectedDepartment;
         return matchesSearch && matchesDepartment;
       } else if (viewMode === 'functions') {
-        const matchesTeam = selectedTeam === 'none' || selectedTeam === '' || 
-          employee.team_memberships.some(tm => tm.team.id === selectedTeam);
+        const matchesTeam = selectedTeam === 'none' || selectedTeam === '' ||
+          employee.teamMemberships.some(tm => tm.team.id === selectedTeam);
         return matchesSearch && matchesTeam;
       } else {
         return matchesSearch;
@@ -222,8 +151,8 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
       const empWithReports = employeeMap.get(employee.id);
       if (!empWithReports) return;
 
-      if (employee.manager_id && employeeMap.has(employee.manager_id)) {
-        const manager = employeeMap.get(employee.manager_id);
+      if (employee.managerId && employeeMap.has(employee.managerId)) {
+        const manager = employeeMap.get(employee.managerId);
         manager?.directReports.push(empWithReports);
       } else {
         topLevel.push(empWithReports);
@@ -244,14 +173,14 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Avatar className="h-10 w-10">
-                  <AvatarImage src={employee.avatar_url || ''} />
-                  <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                  <AvatarImage src={employee.avatarUrl || ''} />
+                  <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                 </Avatar>
                 <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                  <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                   {employee.directReports.length > 0 && (
                     <Badge variant="outline" className="text-xs">
                       {employee.directReports.length} reports
@@ -259,9 +188,9 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
-                {employee.position_role && (
+                {employee.positionRole && (
                   <Badge variant="outline" className="text-xs mt-1">
-                    {employee.position_role.title}
+                    {employee.positionRole.title}
                   </Badge>
                 )}
                 {employee.department && (
@@ -274,7 +203,7 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
         {employee.directReports.length > 0 && (
           <div className="space-y-2">
             {employee.directReports
-              .sort((a, b) => a.full_name.localeCompare(b.full_name))
+              .sort((a, b) => a.fullName.localeCompare(b.fullName))
               .map(report => renderHierarchyNode({ ...report, directReports: [] }, level + 1))}
           </div>
         )}
@@ -286,15 +215,15 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
 
   const departmentCards = (() => {
     const base = departments
-      .map((dept) => {
-        const head = dept.head_id ? employees.find(e => e.id === dept.head_id) : null;
+      .map((dept: any) => {
+        const head = dept.headId ? employees.find(e => e.id === dept.headId) : null;
         const memberCount = employees.filter((e) => e.department?.id === dept.id).length;
         return {
           id: dept.id,
           name: dept.name,
           description: dept.description,
-          head_id: dept.head_id,
-          head: head ? { id: head.id, full_name: head.full_name, avatar_url: head.avatar_url } : null,
+          headId: dept.headId,
+          head: head ? { id: head.id, fullName: head.fullName, avatarUrl: head.avatarUrl } : null,
           memberCount,
         };
       })
@@ -307,10 +236,10 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
 
   const teamSections = (() => {
     const base = teams
-      .map((team) => ({
+      .map((team: any) => ({
         id: team.id,
         name: team.name,
-        employees: filteredEmployees.filter((e) => e.team_memberships.some((tm) => tm.team.id === team.id)),
+        employees: filteredEmployees.filter((e) => e.teamMemberships.some((tm) => tm.team.id === team.id)),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -318,7 +247,7 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
       ? base.filter((t) => t.id === selectedTeam)
       : base;
 
-    const noTeams = filteredEmployees.filter((e) => e.team_memberships.length === 0);
+    const noTeams = filteredEmployees.filter((e) => e.teamMemberships.length === 0);
     return { teams: scoped, noTeams };
   })();
 
@@ -362,15 +291,15 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
                 {dept.head && (
                   <div className="flex items-center gap-2 pt-2 border-t">
                     <Avatar className="h-8 w-8">
-                      <AvatarImage src={dept.head.avatar_url || ''} />
-                      <AvatarFallback className="text-xs">{getInitials(dept.head.full_name)}</AvatarFallback>
+                      <AvatarImage src={dept.head.avatarUrl || ''} />
+                      <AvatarFallback className="text-xs">{getInitials(dept.head.fullName)}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1">
                         <Crown className="h-3 w-3 text-yellow-500" />
                         <span className="text-xs text-muted-foreground">Department Head</span>
                       </div>
-                      <p className="text-sm font-medium truncate">{dept.head.full_name}</p>
+                      <p className="text-sm font-medium truncate">{dept.head.fullName}</p>
                     </div>
                   </div>
                 )}
@@ -464,17 +393,17 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
                           <div className="flex items-center gap-3">
                             <div className="relative">
                               <Avatar className="h-12 w-12">
-                                <AvatarImage src={employee.avatar_url || ''} />
-                                <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                                <AvatarImage src={employee.avatarUrl || ''} />
+                                <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                               </Avatar>
                               <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                              <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                               <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
-                              {employee.position_role && (
+                              {employee.positionRole && (
                                 <Badge variant="outline" className="text-xs mt-1">
-                                  {employee.position_role.title}
+                                  {employee.positionRole.title}
                                 </Badge>
                               )}
                             </div>
@@ -508,11 +437,11 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
                       <CardContent className="p-4">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-12 w-12">
-                            <AvatarImage src={employee.avatar_url || ''} />
-                            <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                            <AvatarImage src={employee.avatarUrl || ''} />
+                            <AvatarFallback>{getInitials(employee.fullName)}</AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                            <h4 className="font-semibold text-sm truncate">{employee.fullName}</h4>
                             <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
                           </div>
                         </div>

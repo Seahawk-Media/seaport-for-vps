@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
@@ -7,25 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { Users } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
-
-interface DirectReport {
-  id: string;
-  full_name: string;
-  email: string;
-  job_title: string | null;
-  avatar_url: string | null;
-  status: string;
-}
 
 export default function ManageReportsPage() {
   const { user, loading: authLoading } = useAuth();
   const { isManager, isAdmin, loading: roleLoading } = useRole();
   const navigate = useNavigate();
-  const [reports, setReports] = useState<DirectReport[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -39,43 +28,44 @@ export default function ManageReportsPage() {
     }
   }, [roleLoading, isManager, isAdmin, navigate]);
 
-  useEffect(() => {
-    const fetchReports = async () => {
-      if (!user || roleLoading) return;
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-      try {
-        const { data: currentProfile } = await supabase
-          .from('profiles')
-          .select('id, organization_id')
-          .eq('user_id', user.id)
-          .single();
+  const { data: allProfiles, isLoading: profilesLoading } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!myProfile && !roleLoading,
+  });
 
-        if (!currentProfile) return;
+  const loading = profilesLoading;
 
-        let query = supabase
-          .from('profiles')
-          .select('id, full_name, email, job_title, avatar_url, status');
-
-        // Admins see all, managers see only direct reports
-        if (isAdmin()) {
-          query = query.eq('organization_id', currentProfile.organization_id);
-        } else {
-          query = query.eq('manager_id', currentProfile.id);
-        }
-
-        const { data, error } = await query.order('full_name');
-
-        if (error) throw error;
-        setReports(data || []);
-      } catch (error) {
-        console.error('Error fetching reports:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchReports();
-  }, [user, roleLoading, isAdmin]);
+  const reports = useMemo(() => {
+    if (!allProfiles || !myProfile) return [];
+    if (isAdmin()) {
+      // Admins see all in the org
+      return allProfiles
+        .map((p: any) => ({
+          id: p.id,
+          fullName: p.fullName,
+          email: p.email,
+          jobTitle: p.jobTitle ?? null,
+          avatarUrl: p.avatarUrl ?? null,
+          status: p.status ?? 'active',
+        }))
+        .sort((a: any, b: any) => (a.fullName ?? '').localeCompare(b.fullName ?? ''));
+    }
+    // Managers see direct reports
+    return allProfiles
+      .filter((p: any) => p.managerId === myProfile.id)
+      .map((p: any) => ({
+        id: p.id,
+        fullName: p.fullName,
+        email: p.email,
+        jobTitle: p.jobTitle ?? null,
+        avatarUrl: p.avatarUrl ?? null,
+        status: p.status ?? 'active',
+      }))
+      .sort((a: any, b: any) => (a.fullName ?? '').localeCompare(b.fullName ?? ''));
+  }, [allProfiles, myProfile, isAdmin]);
 
   const getInitials = (name: string | null) => {
     if (!name) return '?';
@@ -93,8 +83,8 @@ export default function ManageReportsPage() {
   }
 
   return (
-    <DashboardLayout 
-      title="Reports" 
+    <DashboardLayout
+      title="Reports"
       description={isAdmin() ? "All employees in the organization" : "Your direct reports"}
     >
       <div className="space-y-6">
@@ -102,20 +92,20 @@ export default function ManageReportsPage() {
           <EmptyState icon={Users} title={isAdmin() ? 'No employees in the organization yet.' : 'No direct reports yet.'} />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {reports.map((report) => (
-              <Card 
-                key={report.id} 
+            {reports.map((report: any) => (
+              <Card
+                key={report.id}
                 className="cursor-pointer hover:shadow-md transition-shadow"
                 onClick={() => navigate(`/journey/${report.id}`)}
               >
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-3">
                     <Avatar className="h-12 w-12">
-                      <AvatarImage src={report.avatar_url || undefined} />
-                      <AvatarFallback>{getInitials(report.full_name)}</AvatarFallback>
+                      <AvatarImage src={report.avatarUrl || undefined} />
+                      <AvatarFallback>{getInitials(report.fullName)}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
-                      <CardTitle className="text-base truncate">{report.full_name}</CardTitle>
+                      <CardTitle className="text-base truncate">{report.fullName}</CardTitle>
                       <CardDescription className="truncate">{report.email}</CardDescription>
                     </div>
                   </div>
@@ -123,7 +113,7 @@ export default function ManageReportsPage() {
                 <CardContent className="pt-0">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground truncate">
-                      {report.job_title || 'No title'}
+                      {report.jobTitle || 'No title'}
                     </span>
                     <Badge variant={report.status === 'active' ? 'default' : 'secondary'}>
                       {report.status}

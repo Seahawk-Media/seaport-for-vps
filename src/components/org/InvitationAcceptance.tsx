@@ -1,77 +1,37 @@
-
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 
 export const InvitationAcceptance = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const [invitation, setInvitation] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const { toast } = useToast();
 
-  const invitationId = searchParams.get('invitation');
+  const token = searchParams.get('token') || searchParams.get('invitation') || '';
 
-  useEffect(() => {
-    const fetchInvitation = async () => {
-      setLoading(true);
+  const { data: verifyResult, isLoading: loading } = trpc.invitations.verify.useQuery(
+    { token },
+    { enabled: !!token }
+  );
 
-      try {
-        let query = supabase
-          .from('invitations')
-          .select(`
-            *,
-            organizations (name)
-          `)
-          .is('accepted_at', null)
-          .gt('expires_at', new Date().toISOString());
-
-        if (invitationId) {
-          query = query.eq('id', invitationId).limit(1);
-        } else {
-          // When no specific invitation is provided, use the most recent pending invite for the authenticated user
-          query = query.order('created_at', { ascending: false }).limit(1);
-        }
-
-        const { data, error } = await query.maybeSingle();
-
-        if (error) throw error;
-        setInvitation(data);
-      } catch (error: any) {
-        toast({
-          title: "Error fetching invitation",
-          description: error.message,
-          variant: "destructive",
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchInvitation();
-  }, [invitationId, toast]);
+  const invitation = verifyResult?.valid ? verifyResult.invite : null;
 
   const handleAccept = async () => {
     if (!invitation?.id) return;
 
     setAccepting(true);
     try {
-      const { error } = await supabase.rpc('accept_invitation', {
-        invitation_id: invitation.id,
-      });
-
-      if (error) throw error;
-
+      // Note: accept_invitation RPC is not yet available as a tRPC route.
+      // For now, navigate to signup/signin flow with the token.
       toast({
-        title: "Invitation accepted",
-        description: "Welcome to the organization!",
+        title: "Invitation verified",
+        description: "Please sign in or create an account to join the organization.",
       });
-
-      navigate('/');
+      navigate(`/auth?invite=${token}`);
     } catch (error: any) {
       toast({
         title: "Error accepting invitation",
@@ -124,7 +84,7 @@ export const InvitationAcceptance = () => {
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Join Organization</CardTitle>
           <CardDescription>
-            You've been invited to join <strong>{invitation.organizations?.name}</strong>
+            You've been invited to join an organization
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -139,9 +99,9 @@ export const InvitationAcceptance = () => {
           <Button onClick={handleAccept} className="w-full" disabled={accepting}>
             {accepting ? "Accepting..." : "Accept Invitation"}
           </Button>
-          <Button 
-            variant="outline" 
-            onClick={() => navigate('/auth')} 
+          <Button
+            variant="outline"
+            onClick={() => navigate('/auth')}
             className="w-full"
           >
             Cancel

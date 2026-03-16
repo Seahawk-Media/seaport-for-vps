@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
@@ -7,31 +7,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { format } from 'date-fns';
 import { Trophy, Check, X, ExternalLink } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-
-interface Incentive {
-  id: string;
-  profile_id: string;
-  incentive_type: string;
-  title: string;
-  description: string | null;
-  evidence_url: string | null;
-  points: number;
-  status: string;
-  created_at: string;
-  profile_name: string;
-}
 
 export default function ManageIncentivesPage() {
   const { user, loading: authLoading } = useAuth();
   const { isManager, isAdmin, loading: roleLoading } = useRole();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [incentives, setIncentives] = useState<Incentive[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -45,98 +30,63 @@ export default function ManageIncentivesPage() {
     }
   }, [roleLoading, isManager, isAdmin, navigate]);
 
-  const fetchIncentives = async () => {
-    if (!user || roleLoading) return;
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-    try {
-      const { data: currentProfile } = await supabase
-        .from('profiles')
-        .select('id, organization_id')
-        .eq('user_id', user.id)
-        .single();
+  const { data: allProfiles } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!myProfile && !roleLoading,
+  });
 
-      if (!currentProfile) return;
+  const { data: allIncentives, isLoading: incentivesLoading, refetch: refetchIncentives } = trpc.incentives.list.useQuery(undefined, {
+    enabled: !!myProfile && !roleLoading,
+  });
 
-      let profileIds: string[] = [];
+  const reviewMutation = trpc.incentives.review.useMutation({
+    onSuccess: () => {
+      refetchIncentives();
+    },
+  });
 
-      if (isAdmin()) {
-        const { data: orgProfiles } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('organization_id', currentProfile.organization_id);
-        profileIds = orgProfiles?.map(p => p.id) || [];
-      } else {
-        const { data: directReports } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('manager_id', currentProfile.id);
-        profileIds = directReports?.map(p => p.id) || [];
-      }
+  const loading = incentivesLoading;
 
-      if (profileIds.length === 0) {
-        setIncentives([]);
-        setLoading(false);
-        return;
-      }
-
-      const { data, error } = await (supabase
-        .from('incentives' as any)
-        .select('*')
-        .in('profile_id', profileIds)
-        .order('created_at', { ascending: false }) as any);
-
-      if (error) throw error;
-
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', profileIds);
-
-      const profileMap = new Map(profiles?.map(p => [p.id, p.full_name]) || []);
-
-      const incentivesWithNames = (data || []).map((b: any) => ({
-        ...b,
-        profile_name: profileMap.get(b.profile_id) || 'Unknown',
-      }));
-
-      setIncentives(incentivesWithNames);
-    } catch (error) {
-      console.error('Error fetching incentives:', error);
-    } finally {
-      setLoading(false);
+  // Build profile IDs for filtering (admin sees all, manager sees direct reports)
+  const profileIds = useMemo(() => {
+    if (!allProfiles || !myProfile) return new Set<string>();
+    if (isAdmin()) {
+      return new Set(allProfiles.map((p: any) => p.id));
     }
-  };
+    return new Set(allProfiles.filter((p: any) => p.managerId === myProfile.id).map((p: any) => p.id));
+  }, [allProfiles, myProfile, isAdmin]);
 
-  useEffect(() => {
-    fetchIncentives();
-  }, [user, roleLoading, isAdmin]);
+  const profileMap = useMemo(() => {
+    const map = new Map<string, string>();
+    (allProfiles ?? []).forEach((p: any) => map.set(p.id, p.fullName));
+    return map;
+  }, [allProfiles]);
+
+  const incentives = useMemo(() => {
+    return (allIncentives ?? [])
+      .filter((i: any) => profileIds.has(i.profileId))
+      .map((i: any) => ({
+        ...i,
+        profileName: profileMap.get(i.profileId) || 'Unknown',
+      }))
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [allIncentives, profileIds, profileMap]);
 
   const handleApproval = async (incentiveId: string, approved: boolean) => {
     try {
-      const { data: currentProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user!.id)
-        .single();
-
-      const { error } = await (supabase
-        .from('incentives' as any)
-        .update({
-          status: approved ? 'approved' : 'rejected',
-          reviewed_by: currentProfile?.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', incentiveId) as any);
-
-      if (error) throw error;
+      await reviewMutation.mutateAsync({
+        id: incentiveId,
+        status: approved ? 'approved' : 'rejected',
+      });
 
       toast({
         title: approved ? 'Incentive approved' : 'Incentive rejected',
         description: `The incentive has been ${approved ? 'approved' : 'rejected'}.`,
       });
-      fetchIncentives();
-    } catch (error) {
-      console.error('Error updating incentive:', error);
+    } catch {
       toast({
         title: 'Error',
         description: 'Failed to update the incentive.',
@@ -164,8 +114,8 @@ export default function ManageIncentivesPage() {
     );
   }
 
-  const pendingIncentives = incentives.filter(b => b.status === 'pending');
-  const processedIncentives = incentives.filter(b => b.status !== 'pending');
+  const pendingIncentives = incentives.filter((b: any) => b.status === 'pending');
+  const processedIncentives = incentives.filter((b: any) => b.status !== 'pending');
 
   return (
     <DashboardLayout title="Incentives" description="Review and approve team achievements">
@@ -177,16 +127,16 @@ export default function ManageIncentivesPage() {
             <EmptyState icon={Trophy} title="No incentives pending review." />
           ) : (
             <div className="space-y-4">
-              {pendingIncentives.map((incentive) => (
+              {pendingIncentives.map((incentive: any) => (
                 <Card key={incentive.id}>
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="flex items-center gap-2">
                           <CardTitle className="text-base">{incentive.title}</CardTitle>
-                          {incentive.evidence_url && (
+                          {incentive.evidenceUrl && (
                             <a
-                              href={incentive.evidence_url}
+                              href={incentive.evidenceUrl}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-primary hover:text-primary/80"
@@ -196,7 +146,7 @@ export default function ManageIncentivesPage() {
                           )}
                         </div>
                         <CardDescription>
-                          {incentive.profile_name} • {incentive.incentive_type} • {incentive.points} pts
+                          {incentive.profileName} • {incentive.incentiveType} • {incentive.points} pts
                         </CardDescription>
                       </div>
                       <div className="flex gap-2">
@@ -236,14 +186,14 @@ export default function ManageIncentivesPage() {
             <EmptyState title="No processed incentives yet." />
           ) : (
             <div className="space-y-4">
-              {processedIncentives.slice(0, 10).map((incentive) => (
+              {processedIncentives.slice(0, 10).map((incentive: any) => (
                 <Card key={incentive.id}>
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between">
                       <div>
                         <CardTitle className="text-base">{incentive.title}</CardTitle>
                         <CardDescription>
-                          {incentive.profile_name} • {incentive.incentive_type} • {incentive.points} pts
+                          {incentive.profileName} • {incentive.incentiveType} • {incentive.points} pts
                         </CardDescription>
                       </div>
                       <Badge variant={getStatusColor(incentive.status)}>

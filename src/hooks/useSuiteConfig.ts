@@ -48,7 +48,10 @@ function load(): SuiteConfig {
       });
       return { ...DEFAULT_CONFIG, ...parsed, apps: mergedApps };
     }
-  } catch {}
+  } catch {
+    // If localStorage read/parse fails, fall back to defaults
+    return DEFAULT_CONFIG;
+  }
   return DEFAULT_CONFIG;
 }
 

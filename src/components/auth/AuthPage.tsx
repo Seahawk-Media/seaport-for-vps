@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Building2, Bot, LayoutGrid, GitBranch } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
-import { logLoginActivity } from '@/hooks/useActivityLogger';
+import { trpc } from '@/lib/trpc';
 
 const pillars = [
   {
@@ -46,59 +45,52 @@ export const AuthPage = () => {
 
   const invitationId = searchParams.get('invitation');
 
-  const navigateToMyJourney = async (userId: string) => {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', userId)
-      .single();
-
-    if (profile) {
-      navigate(`/journey/${profile.id}`);
-    } else {
-      navigate('/dashboard');
-    }
-  };
+  const meQuery = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+    retry: false,
+  });
 
   useEffect(() => {
     if (!authLoading && user && invitationId) {
       navigate(`/accept-invitation?invitation=${invitationId}`);
     } else if (!authLoading && user) {
-      navigateToMyJourney(user.id);
+      if (meQuery.data) {
+        navigate(`/journey/${meQuery.data.id}`);
+      } else if (!meQuery.isLoading) {
+        navigate('/dashboard');
+      }
     }
-  }, [user, authLoading, invitationId, navigate]);
+  }, [user, authLoading, invitationId, navigate, meQuery.data, meQuery.isLoading]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+
     const { error, data } = await signIn(email, password);
-    
+
     if (error) {
-      toast({ title: 'Sign in failed', description: error.message, variant: 'destructive' });
+      toast({ title: 'Sign in failed', description: error.message || 'Invalid credentials', variant: 'destructive' });
     } else {
-      const userId = data?.user?.id;
-      if (userId) logLoginActivity(userId);
       toast({ title: 'Welcome back!', description: 'You have successfully signed in.' });
-      navigateToMyJourney(userId || user?.id || '');
+      navigate('/dashboard');
     }
-    
+
     setLoading(false);
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+
     const { error } = await signUp(email, password, fullName);
-    
+
     if (error) {
-      toast({ title: 'Sign up failed', description: error.message, variant: 'destructive' });
+      toast({ title: 'Sign up failed', description: error.message || 'Could not create account', variant: 'destructive' });
     } else {
-      toast({ title: 'Account created!', description: `Welcome to ${import.meta.env.VITE_APP_NAME || 'Seaport'}. Setting up your workspace...` });
+      toast({ title: 'Account created!', description: 'Welcome to Seaport. Setting up your workspace...' });
       navigate('/dashboard');
     }
-    
+
     setLoading(false);
   };
 
@@ -110,7 +102,7 @@ export const AuthPage = () => {
           <div className="rounded-lg bg-primary p-2">
             <Building2 className="w-5 h-5 text-primary-foreground" />
           </div>
-          <span className="text-lg font-bold tracking-tight">{import.meta.env.VITE_APP_NAME || 'Seaport'}</span>
+          <span className="text-lg font-bold tracking-tight">Seaport</span>
         </div>
 
         <div className="space-y-8">
@@ -120,7 +112,7 @@ export const AuthPage = () => {
               The open platform for<br />AI-powered organizations.
             </h1>
             <p className="text-muted-foreground text-base leading-relaxed max-w-sm">
-              {import.meta.env.VITE_APP_NAME || 'Seaport'} gives businesses a structured foundation to organize their people, 
+              Seaport gives businesses a structured foundation to organize their people,
               plug AI agents into every layer of the org, and centralize all internal business apps — in one place.
             </p>
           </div>
@@ -141,7 +133,7 @@ export const AuthPage = () => {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Open source · Self-hostable · Built for modern businesses
+          Open source &middot; Self-hostable &middot; Built for modern businesses
         </p>
       </div>
 
@@ -153,7 +145,7 @@ export const AuthPage = () => {
             <div className="rounded-lg bg-primary p-2">
               <Building2 className="w-5 h-5 text-primary-foreground" />
             </div>
-            <span className="text-lg font-bold">{import.meta.env.VITE_APP_NAME || 'Seaport'}</span>
+            <span className="text-lg font-bold">Seaport</span>
           </div>
 
           <div className="text-center lg:text-left">
@@ -168,7 +160,7 @@ export const AuthPage = () => {
                   <TabsTrigger value="signin">Sign In</TabsTrigger>
                   <TabsTrigger value="signup">Sign Up</TabsTrigger>
                 </TabsList>
-                
+
                 <TabsContent value="signin">
                   <form onSubmit={handleSignIn} className="space-y-4">
                     <div className="space-y-2">
@@ -184,7 +176,7 @@ export const AuthPage = () => {
                     </Button>
                   </form>
                 </TabsContent>
-                
+
                 <TabsContent value="signup">
                   <form onSubmit={handleSignUp} className="space-y-4">
                     <div className="space-y-2">
@@ -210,7 +202,7 @@ export const AuthPage = () => {
 
           <p className="text-center text-xs text-muted-foreground">
             Open source & self-hostable.{' '}
-            <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">View on GitHub</a>
+            <a href="https://github.com/seahawkmedia/seaport-for-vps" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">View on GitHub</a>
           </p>
         </div>
       </div>

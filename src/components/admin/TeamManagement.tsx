@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import React, { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Users, Edit, Trash2, UserPlus, Crown, Building2, Network } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { Plus, Edit, Trash2, UserPlus, Crown, Building2, Network } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
 interface Department {
@@ -18,15 +18,15 @@ interface Team {
   id: string;
   name: string;
   description: string | null;
-  team_lead_id: string | null;
-  team_type: string;
-  department_id: string | null;
-  organization_id: string;
-  created_at: string;
-  team_members?: TeamMember[];
-  team_lead?: {
+  teamLeadId: string | null;
+  teamType: string;
+  departmentId: string | null;
+  organizationId: string;
+  createdAt: string;
+  teamMembers?: TeamMember[];
+  teamLead?: {
     id: string;
-    full_name: string;
+    fullName: string;
     email: string;
   };
   department?: { name: string } | null;
@@ -37,232 +37,134 @@ interface TeamMember {
   role: string;
   profile: {
     id: string;
-    full_name: string;
+    fullName: string;
     email: string;
   };
 }
 
 interface Profile {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
 }
 
 export const TeamManagement: React.FC = () => {
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [showMemberForm, setShowMemberForm] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    team_type: 'functional',
-    team_lead_id: '',
-    department_id: '',
+    teamType: 'functional',
+    teamLeadId: '',
+    departmentId: '',
   });
   const [memberFormData, setMemberFormData] = useState({
-    profile_id: '',
-    role_in_team: 'member'
+    profileId: '',
+    roleInTeam: 'member'
   });
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchTeams();
-    fetchProfiles();
-    fetchDepartments();
-  }, []);
+  const utils = trpc.useUtils();
+  const { data: teamsRaw, isLoading: loading } = trpc.teams.list.useQuery();
+  const { data: profilesRaw } = trpc.profiles.list.useQuery();
+  const { data: departmentsRaw } = trpc.departments.list.useQuery();
 
-  const fetchDepartments = async () => {
-    try {
-      const { data } = await supabase.from('departments').select('id, name').order('name');
-      setDepartments(data || []);
-    } catch (error) {
-      console.error('Error fetching departments:', error);
-    }
-  };
+  const teams: Team[] = (teamsRaw || []) as Team[];
+  const profiles: Profile[] = (profilesRaw ?? []).map((p) => ({
+    id: p.id,
+    fullName: p.fullName,
+    email: p.email,
+  }));
+  const departments: Department[] = (departmentsRaw ?? []).map((d) => ({
+    id: d.id,
+    name: d.name,
+  }));
 
-  const fetchTeams = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('teams')
-        .select(`
-          *,
-          team_members (
-            id,
-            role,
-            profile:profiles (
-              id,
-              full_name,
-              email
-            )
-          )
-        `)
-        .order('name');
+  const createTeam = trpc.teams.create.useMutation({
+    onSuccess: () => {
+      utils.teams.list.invalidate();
+      toast({ title: "Success", description: "Team created successfully" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save team", variant: "destructive" });
+    },
+  });
 
-      if (error) throw error;
-      
-      // Fetch team leads separately to handle the join properly
-      const teamsWithLeads = await Promise.all(
-        (data || []).map(async (team) => {
-          if (team.team_lead_id) {
-            const { data: leadData } = await supabase
-              .from('profiles')
-              .select('id, full_name, email')
-              .eq('id', team.team_lead_id)
-              .single();
-            
-            return { ...team, team_lead: leadData };
-          }
-          return team;
-        })
-      );
-      
-      setTeams(teamsWithLeads);
-    } catch (error) {
-      console.error('Error fetching teams:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch teams",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const updateTeam = trpc.teams.update.useMutation({
+    onSuccess: () => {
+      utils.teams.list.invalidate();
+      toast({ title: "Success", description: "Team updated successfully" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save team", variant: "destructive" });
+    },
+  });
 
-  const fetchProfiles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, email')
-        .order('full_name');
+  const deleteTeamMutation = trpc.teams.delete.useMutation({
+    onSuccess: () => {
+      utils.teams.list.invalidate();
+      toast({ title: "Success", description: "Team deleted successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete team", variant: "destructive" });
+    },
+  });
 
-      if (error) throw error;
-      setProfiles(data || []);
-    } catch (error) {
-      console.error('Error fetching profiles:', error);
-    }
-  };
+  const addMember = trpc.teamMembers.add.useMutation({
+    onSuccess: () => {
+      utils.teams.list.invalidate();
+      toast({ title: "Success", description: "Team member added successfully" });
+      setShowMemberForm(null);
+      setMemberFormData({ profileId: '', roleInTeam: 'member' });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to add team member", variant: "destructive" });
+    },
+  });
+
+  const removeMember = trpc.teamMembers.remove.useMutation({
+    onSuccess: () => {
+      utils.teams.list.invalidate();
+      toast({ title: "Success", description: "Team member removed successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to remove team member", variant: "destructive" });
+    },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
-    try {
-      // Get user's organization
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
-      
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .single();
-      
-      if (!profile?.organization_id) throw new Error('No organization found');
-
-      const teamData = {
+    if (editingTeam) {
+      updateTeam.mutate({
+        id: editingTeam.id,
         name: formData.name,
-        description: formData.description || null,
-        team_type: formData.team_type,
-        team_lead_id: formData.team_lead_id === 'none' ? null : formData.team_lead_id || null,
-        department_id: formData.department_id === 'none' ? null : formData.department_id || null,
-        organization_id: profile.organization_id
-      };
-
-      if (editingTeam) {
-        const { error } = await supabase
-          .from('teams')
-          .update(teamData)
-          .eq('id', editingTeam.id);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Team updated successfully"
-        });
-      } else {
-        const { error } = await supabase
-          .from('teams')
-          .insert([teamData]);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Team created successfully"
-        });
-      }
-
-      resetForm();
-      fetchTeams();
-    } catch (error) {
-      console.error('Error saving team:', error);
-      toast({
-        title: "Error",
-        description: "Failed to save team",
-        variant: "destructive"
+        description: formData.description || undefined,
       });
-    } finally {
-      setLoading(false);
+    } else {
+      createTeam.mutate({
+        name: formData.name,
+        description: formData.description || undefined,
+        teamType: formData.teamType || undefined,
+        departmentId: formData.departmentId === 'none' ? undefined : formData.departmentId || undefined,
+      });
     }
   };
 
   const handleAddMember = async (teamId: string) => {
-    try {
-      const { error } = await supabase
-        .from('team_members')
-        .insert([{
-          team_id: teamId,
-          profile_id: memberFormData.profile_id,
-          role: memberFormData.role_in_team
-        }]);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "Team member added successfully"
-      });
-      setShowMemberForm(null);
-      setMemberFormData({ profile_id: '', role_in_team: 'member' });
-      fetchTeams();
-    } catch (error) {
-      console.error('Error adding team member:', error);
-      toast({
-        title: "Error",
-        description: "Failed to add team member",
-        variant: "destructive"
-      });
-    }
+    addMember.mutate({
+      teamId,
+      profileId: memberFormData.profileId,
+      role: memberFormData.roleInTeam,
+    });
   };
 
   const handleRemoveMember = async (memberId: string) => {
     if (!confirm('Are you sure you want to remove this team member?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('team_members')
-        .delete()
-        .eq('id', memberId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "Team member removed successfully"
-      });
-      fetchTeams();
-    } catch (error) {
-      console.error('Error removing team member:', error);
-      toast({
-        title: "Error",
-        description: "Failed to remove team member",
-        variant: "destructive"
-      });
-    }
+    removeMember.mutate({ id: memberId });
   };
 
   const handleEdit = (team: Team) => {
@@ -270,41 +172,20 @@ export const TeamManagement: React.FC = () => {
     setFormData({
       name: team.name,
       description: team.description || '',
-      team_type: team.team_type,
-      team_lead_id: team.team_lead_id || '',
-      department_id: team.department_id || '',
+      teamType: team.teamType,
+      teamLeadId: team.teamLeadId || '',
+      departmentId: team.departmentId || '',
     });
     setShowForm(true);
   };
 
   const handleDelete = async (teamId: string) => {
     if (!confirm('Are you sure you want to delete this team?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('teams')
-        .delete()
-        .eq('id', teamId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "Team deleted successfully"
-      });
-      fetchTeams();
-    } catch (error) {
-      console.error('Error deleting team:', error);
-      toast({
-        title: "Error",
-        description: "Failed to delete team",
-        variant: "destructive"
-      });
-    }
+    deleteTeamMutation.mutate({ id: teamId });
   };
 
   const resetForm = () => {
-    setFormData({ name: '', description: '', team_type: 'functional', team_lead_id: '', department_id: '' });
+    setFormData({ name: '', description: '', teamType: 'functional', teamLeadId: '', departmentId: '' });
     setShowForm(false);
     setEditingTeam(null);
   };
@@ -322,7 +203,7 @@ export const TeamManagement: React.FC = () => {
             Create and manage functions within departments
           </p>
         </div>
-        <Button 
+        <Button
           onClick={() => setShowForm(true)}
           className="flex items-center gap-2"
         >
@@ -362,10 +243,10 @@ export const TeamManagement: React.FC = () => {
               </div>
 
               <div>
-                <Label htmlFor="team_type">Function Type</Label>
-                <Select 
-                  value={formData.team_type} 
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, team_type: value }))}
+                <Label htmlFor="teamType">Function Type</Label>
+                <Select
+                  value={formData.teamType}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, teamType: value }))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -380,10 +261,10 @@ export const TeamManagement: React.FC = () => {
               </div>
 
               <div>
-                <Label htmlFor="team_lead">Function Lead (Optional)</Label>
-                <Select 
-                  value={formData.team_lead_id} 
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, team_lead_id: value }))}
+                <Label htmlFor="teamLead">Function Lead (Optional)</Label>
+                <Select
+                  value={formData.teamLeadId}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, teamLeadId: value }))}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select function lead" />
@@ -392,7 +273,7 @@ export const TeamManagement: React.FC = () => {
                     <SelectItem value="none">No Function Lead</SelectItem>
                     {profiles.map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
-                        {profile.full_name}
+                        {profile.fullName}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -402,8 +283,8 @@ export const TeamManagement: React.FC = () => {
               <div>
                 <Label htmlFor="department">Department</Label>
                 <Select
-                  value={formData.department_id}
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, department_id: value }))}
+                  value={formData.departmentId}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, departmentId: value }))}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select department" />
@@ -420,7 +301,7 @@ export const TeamManagement: React.FC = () => {
               </div>
 
               <div className="flex gap-2">
-                <Button type="submit" disabled={loading}>
+                <Button type="submit" disabled={createTeam.isPending || updateTeam.isPending}>
                   {editingTeam ? 'Update' : 'Create'} Function
                 </Button>
                 <Button type="button" variant="outline" onClick={resetForm}>
@@ -442,7 +323,7 @@ export const TeamManagement: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="font-semibold">{team.name}</h4>
-                      {team.team_lead && (
+                      {team.teamLead && (
                         <Crown className="h-4 w-4 text-yellow-500" />
                       )}
                     </div>
@@ -450,17 +331,17 @@ export const TeamManagement: React.FC = () => {
                       <p className="text-sm text-muted-foreground">{team.description}</p>
                     )}
                     <p className="text-xs text-muted-foreground capitalize">
-                      {team.team_type.replace('_', ' ')} Function
+                      {team.teamType.replace('_', ' ')} Function
                     </p>
-                    {team.team_lead && (
+                    {team.teamLead && (
                       <p className="text-xs text-muted-foreground">
-                        Function Lead: {team.team_lead.full_name}
+                        Function Lead: {team.teamLead.fullName}
                       </p>
                     )}
-                    {team.department_id && (
+                    {team.departmentId && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1">
                         <Building2 className="h-3 w-3" />
-                        {departments.find(d => d.id === team.department_id)?.name || 'Unknown dept'}
+                        {departments.find(d => d.id === team.departmentId)?.name || 'Unknown dept'}
                       </p>
                     )}
                   </div>
@@ -494,24 +375,24 @@ export const TeamManagement: React.FC = () => {
                 <div className="border-t pt-4 mt-4">
                   <h5 className="font-medium mb-3">Add Function Member</h5>
                   <div className="flex gap-2">
-                    <Select 
-                      value={memberFormData.profile_id} 
-                      onValueChange={(value) => setMemberFormData(prev => ({ ...prev, profile_id: value }))}
+                    <Select
+                      value={memberFormData.profileId}
+                      onValueChange={(value) => setMemberFormData(prev => ({ ...prev, profileId: value }))}
                     >
                       <SelectTrigger className="flex-1">
                         <SelectValue placeholder="Select person" />
                       </SelectTrigger>
                       <SelectContent>
-                        {profiles.filter(p => !team.team_members?.some(tm => tm.profile.id === p.id)).map((profile) => (
+                        {profiles.filter(p => !team.teamMembers?.some(tm => tm.profile.id === p.id)).map((profile) => (
                           <SelectItem key={profile.id} value={profile.id}>
-                            {profile.full_name}
+                            {profile.fullName}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    <Select 
-                      value={memberFormData.role_in_team} 
-                      onValueChange={(value) => setMemberFormData(prev => ({ ...prev, role_in_team: value }))}
+                    <Select
+                      value={memberFormData.roleInTeam}
+                      onValueChange={(value) => setMemberFormData(prev => ({ ...prev, roleInTeam: value }))}
                     >
                       <SelectTrigger className="w-32">
                         <SelectValue />
@@ -522,14 +403,14 @@ export const TeamManagement: React.FC = () => {
                         <SelectItem value="coordinator">Coordinator</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button 
+                    <Button
                       onClick={() => handleAddMember(team.id)}
-                      disabled={!memberFormData.profile_id}
+                      disabled={!memberFormData.profileId}
                     >
                       Add
                     </Button>
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={() => setShowMemberForm(null)}
                     >
                       Cancel
@@ -538,27 +419,26 @@ export const TeamManagement: React.FC = () => {
                 </div>
               )}
 
-              {team.team_members && team.team_members.length > 0 && (
+              {team.teamMembers && team.teamMembers.length > 0 && (
                 <div className="border-t pt-4 mt-4">
-                  <h5 className="font-medium mb-3">Function Members ({team.team_members.length})</h5>
+                  <h5 className="font-medium mb-3">Function Members ({team.teamMembers.length})</h5>
                   <div className="space-y-2">
-                    {team.team_members
+                    {team.teamMembers
                       .sort((a, b) => {
-                        // Team lead first (if they're also a member)
-                        const aIsLead = team.team_lead && a.profile.id === team.team_lead.id;
-                        const bIsLead = team.team_lead && b.profile.id === team.team_lead.id;
+                        const aIsLead = team.teamLead && a.profile.id === team.teamLead.id;
+                        const bIsLead = team.teamLead && b.profile.id === team.teamLead.id;
                         if (aIsLead && !bIsLead) return -1;
                         if (!aIsLead && bIsLead) return 1;
-                        return a.profile.full_name.localeCompare(b.profile.full_name);
+                        return a.profile.fullName.localeCompare(b.profile.fullName);
                       })
                       .map((member) => {
-                        const isTeamLead = team.team_lead && member.profile.id === team.team_lead.id;
+                        const isTeamLead = team.teamLead && member.profile.id === team.teamLead.id;
                         return (
                           <div key={member.id} className="flex justify-between items-center p-2 bg-muted rounded">
                             <div className="flex items-center gap-2">
                               {isTeamLead && <Crown className="h-4 w-4 text-yellow-500" />}
                               <div>
-                                <span className="font-medium">{member.profile.full_name}</span>
+                                <span className="font-medium">{member.profile.fullName}</span>
                                 <span className="text-sm text-muted-foreground ml-2">
                                   ({member.role})
                                 </span>

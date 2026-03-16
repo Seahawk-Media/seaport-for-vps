@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -10,33 +10,26 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Users, Search, ChevronRight, Building2 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
-
-interface Department {
-  id: string;
-  name: string;
-}
+import { trpc } from '@/lib/trpc';
+import { useState } from 'react';
 
 interface Team {
   id: string;
   name: string;
   description: string | null;
-  department_id: string | null;
-  team_lead_id: string | null;
-  team_lead?: {
+  departmentId: string | null;
+  teamLeadId: string | null;
+  teamLead?: {
     id: string;
-    full_name: string;
-    avatar_url: string | null;
+    fullName: string;
+    avatarUrl: string | null;
   } | null;
-  member_count: number;
+  memberCount: number;
 }
 
 export default function FunctionsPage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
 
@@ -46,54 +39,42 @@ export default function FunctionsPage() {
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const { data: teamsData, isLoading: teamsLoading } = trpc.teams.list.useQuery();
+  const { data: departmentsData, isLoading: deptsLoading } = trpc.departments.list.useQuery();
+  const { data: profilesData } = trpc.profiles.list.useQuery();
 
-  const fetchData = async () => {
-    try {
-      const [teamsRes, departmentsRes, membersRes] = await Promise.all([
-        supabase.from('teams').select('*, team_lead:profiles!teams_team_lead_id_fkey(id, full_name, avatar_url)').order('name'),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('team_members').select('team_id')
-      ]);
+  const loading = teamsLoading || deptsLoading;
 
-      if (teamsRes.error) throw teamsRes.error;
-      if (departmentsRes.error) throw departmentsRes.error;
-      if (membersRes.error) throw membersRes.error;
+  const departments = (departmentsData ?? []).map(d => ({ id: d.id, name: d.name }));
 
-      // Count members per team
-      const memberCounts = new Map<string, number>();
-      membersRes.data?.forEach((m: any) => {
-        memberCounts.set(m.team_id, (memberCounts.get(m.team_id) || 0) + 1);
-      });
-
-      const teamsWithCounts = teamsRes.data.map((team: any) => ({
-        ...team,
-        member_count: memberCounts.get(team.id) || 0
-      }));
-
-      setTeams(teamsWithCounts);
-      setDepartments(departmentsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Build teams with lead info and member counts
+  const teams: Team[] = (teamsData ?? []).map((team: any) => {
+    const lead = team.teamLeadId && profilesData
+      ? profilesData.find((p: any) => p.id === team.teamLeadId)
+      : null;
+    return {
+      id: team.id,
+      name: team.name,
+      description: team.description ?? null,
+      departmentId: team.departmentId ?? null,
+      teamLeadId: team.teamLeadId ?? null,
+      teamLead: lead ? { id: lead.id, fullName: lead.fullName, avatarUrl: lead.avatarUrl } : null,
+      memberCount: team.memberCount ?? 0,
+    };
+  });
 
   const getInitials = (name: string) => name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '??';
 
   const filteredTeams = teams.filter(team => {
     const matchesSearch = team.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (team.description && team.description.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesDepartment = filterDepartment === 'all' || team.department_id === filterDepartment;
+    const matchesDepartment = filterDepartment === 'all' || team.departmentId === filterDepartment;
     return matchesSearch && matchesDepartment;
   });
 
   // Group teams by department
   const groupedTeams = filteredTeams.reduce((acc, team) => {
-    const deptId = team.department_id || 'unassigned';
+    const deptId = team.departmentId || 'unassigned';
     const deptName = departments.find(d => d.id === deptId)?.name || 'Unassigned';
     if (!acc[deptName]) acc[deptName] = [];
     acc[deptName].push(team);
@@ -124,7 +105,7 @@ export default function FunctionsPage() {
               className="pl-10"
             />
           </div>
-          
+
           <Select value={filterDepartment} onValueChange={setFilterDepartment}>
             <SelectTrigger className="w-56">
               <SelectValue placeholder="Filter by Department" />
@@ -150,7 +131,7 @@ export default function FunctionsPage() {
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {deptTeams.map((team) => (
-                <Card 
+                <Card
                   key={team.id}
                   className="cursor-pointer hover:shadow-md transition-all group"
                   onClick={() => navigate(`/function/${team.id}`)}
@@ -164,7 +145,7 @@ export default function FunctionsPage() {
                         <div>
                           <CardTitle className="text-base">{team.name}</CardTitle>
                           <Badge variant="outline" className="text-xs mt-1">
-                            {team.member_count} members
+                            {team.memberCount} members
                           </Badge>
                         </div>
                       </div>
@@ -175,14 +156,14 @@ export default function FunctionsPage() {
                     {team.description && (
                       <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{team.description}</p>
                     )}
-                    {team.team_lead && (
+                    {team.teamLead && (
                       <div className="flex items-center gap-2 text-sm">
                         <span className="text-muted-foreground">Lead:</span>
                         <Avatar className="h-5 w-5">
-                          <AvatarImage src={team.team_lead.avatar_url || ''} />
-                          <AvatarFallback className="text-xs">{getInitials(team.team_lead.full_name)}</AvatarFallback>
+                          <AvatarImage src={team.teamLead.avatarUrl || ''} />
+                          <AvatarFallback className="text-xs">{getInitials(team.teamLead.fullName)}</AvatarFallback>
                         </Avatar>
-                        <span className="font-medium">{team.team_lead.full_name}</span>
+                        <span className="font-medium">{team.teamLead.fullName}</span>
                       </div>
                     )}
                   </CardContent>

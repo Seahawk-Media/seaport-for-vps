@@ -1,19 +1,12 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle, BookOpen } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
-
-interface CoursePage {
-  id: string;
-  title: string;
-  content: string;
-  page_order: number;
-}
 
 interface CourseViewerProps {
   courseId: string;
@@ -23,129 +16,68 @@ interface CourseViewerProps {
 export const CourseViewer = ({ courseId, onClose }: CourseViewerProps) => {
   const { organization } = useOrganization();
   const { user } = useAuth();
-  const [course, setCourse] = useState<{ title: string; description: string | null } | null>(null);
-  const [pages, setPages] = useState<CoursePage[]>([]);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [completing, setCompleting] = useState(false);
-  const [profileId, setProfileId] = useState<string | null>(null);
   const [isCompleted, setIsCompleted] = useState(false);
 
+  const { data: course, isLoading: courseLoading } = trpc.academy.getCourse.useQuery(
+    { id: courseId },
+    { enabled: !!user && !!organization }
+  );
+
+  const { data: pages = [], isLoading: pagesLoading } = trpc.academy.listPages.useQuery(
+    { courseId },
+    { enabled: !!user && !!organization }
+  );
+
+  const { data: progressData, isLoading: progressLoading } = trpc.academy.getProgress.useQuery(
+    { courseId },
+    { enabled: !!user && !!organization }
+  );
+
+  const updateProgressMutation = trpc.academy.updateProgress.useMutation();
+
+  const loading = courseLoading || pagesLoading || progressLoading;
+
+  // Sort pages by pageOrder
+  const sortedPages = [...pages].sort((a: any, b: any) => (a.pageOrder ?? 0) - (b.pageOrder ?? 0));
+
   useEffect(() => {
-    fetchData();
-  }, [courseId, user]);
-
-  const fetchData = async () => {
-    if (!user || !organization) return;
-    setLoading(true);
-
-    try {
-      // Get profile ID
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!profileData) throw new Error('Profile not found');
-      setProfileId(profileData.id);
-
-      // Fetch course
-      const { data: courseData, error: courseError } = await supabase
-        .from('courses')
-        .select('title, description')
-        .eq('id', courseId)
-        .single();
-
-      if (courseError) throw courseError;
-      setCourse(courseData);
-
-      // Fetch pages
-      const { data: pagesData, error: pagesError } = await supabase
-        .from('course_pages')
-        .select('*')
-        .eq('course_id', courseId)
-        .order('page_order', { ascending: true });
-
-      if (pagesError) throw pagesError;
-      setPages(pagesData || []);
-
-      // Fetch or create progress
-      const { data: progressData } = await supabase
-        .from('course_progress')
-        .select('current_page_order, completed_at')
-        .eq('course_id', courseId)
-        .eq('profile_id', profileData.id)
-        .single();
-
-      if (progressData) {
-        if (progressData.completed_at) {
-          setIsCompleted(true);
-          setCurrentPageIndex(0);
-        } else {
-          setCurrentPageIndex(progressData.current_page_order || 0);
-        }
+    if (progressData) {
+      if (progressData.completedAt) {
+        setIsCompleted(true);
+        setCurrentPageIndex(0);
       } else {
-        // Create initial progress record
-        await supabase.from('course_progress').insert({
-          course_id: courseId,
-          profile_id: profileData.id,
-          organization_id: organization.id,
-          current_page_order: 0,
-        });
+        setCurrentPageIndex(progressData.currentPageOrder || 0);
       }
-    } catch (error) {
-      console.error('Error fetching course:', error);
-      toast.error('Failed to load course');
-    } finally {
-      setLoading(false);
+    } else if (!progressLoading && user) {
+      // Create initial progress record
+      updateProgressMutation.mutate({ courseId, currentPageOrder: 0 });
     }
-  };
+  }, [progressData, progressLoading]);
 
-  const handleNext = async () => {
-    if (!profileId) return;
-
+  const handleNext = () => {
     const nextIndex = currentPageIndex + 1;
     setCurrentPageIndex(nextIndex);
-
-    // Update progress
-    try {
-      await supabase
-        .from('course_progress')
-        .update({ current_page_order: nextIndex })
-        .eq('course_id', courseId)
-        .eq('profile_id', profileId);
-    } catch (error) {
-      console.error('Error updating progress:', error);
-    }
+    updateProgressMutation.mutate({ courseId, currentPageOrder: nextIndex });
   };
 
   const handlePrevious = () => {
     setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
   };
 
-  const handleComplete = async () => {
-    if (!profileId) return;
-    setCompleting(true);
-
-    try {
-      await supabase
-        .from('course_progress')
-        .update({
-          completed_at: new Date().toISOString(),
-          current_page_order: pages.length - 1,
-        })
-        .eq('course_id', courseId)
-        .eq('profile_id', profileId);
-
-      toast.success('Course completed!');
-      setIsCompleted(true);
-    } catch (error) {
-      console.error('Error completing course:', error);
-      toast.error('Failed to complete course');
-    } finally {
-      setCompleting(false);
-    }
+  const handleComplete = () => {
+    updateProgressMutation.mutate(
+      { courseId, currentPageOrder: sortedPages.length - 1 },
+      {
+        onSuccess: () => {
+          toast.success('Course completed!');
+          setIsCompleted(true);
+        },
+        onError: () => {
+          toast.error('Failed to complete course');
+        },
+      }
+    );
   };
 
   if (loading) {
@@ -156,7 +88,7 @@ export const CourseViewer = ({ courseId, onClose }: CourseViewerProps) => {
     );
   }
 
-  if (!course || pages.length === 0) {
+  if (!course || sortedPages.length === 0) {
     return (
       <div className="p-6">
         <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -173,12 +105,11 @@ export const CourseViewer = ({ courseId, onClose }: CourseViewerProps) => {
     );
   }
 
-  const currentPage = pages[currentPageIndex];
-  const progress = ((currentPageIndex + 1) / pages.length) * 100;
-  const isLastPage = currentPageIndex === pages.length - 1;
+  const currentPage = sortedPages[currentPageIndex];
+  const progress = ((currentPageIndex + 1) / sortedPages.length) * 100;
+  const isLastPage = currentPageIndex === sortedPages.length - 1;
 
   if (isCompleted && !isLastPage) {
-    // Show completion screen for already completed courses
     return (
       <div className="p-6">
         <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -218,7 +149,7 @@ export const CourseViewer = ({ courseId, onClose }: CourseViewerProps) => {
           <div className="flex-1">
             <h1 className="text-lg font-semibold">{course.title}</h1>
             <p className="text-sm text-muted-foreground">
-              Page {currentPageIndex + 1} of {pages.length}
+              Page {currentPageIndex + 1} of {sortedPages.length}
             </p>
           </div>
         </div>
@@ -247,10 +178,10 @@ export const CourseViewer = ({ courseId, onClose }: CourseViewerProps) => {
             {isLastPage ? (
               <Button
                 onClick={handleComplete}
-                disabled={completing}
+                disabled={updateProgressMutation.isPending}
                 className="bg-green-600 hover:bg-green-700"
               >
-                {completing ? (
+                {updateProgressMutation.isPending ? (
                   'Completing...'
                 ) : (
                   <>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useToast } from "@/hooks/use-toast";
 
@@ -16,91 +16,55 @@ interface TimeOffType {
   id: string;
   name: string;
   description: string | null;
-  default_days_per_year: number | null;
-  is_active: boolean;
+  defaultDaysPerYear: number | null;
+  isActive: boolean;
 }
 
 export const TimeOffTypesManagement: React.FC = () => {
-  const [timeOffTypes, setTimeOffTypes] = useState<TimeOffType[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingType, setEditingType] = useState<TimeOffType | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    default_days_per_year: 0,
-    is_active: true
+    defaultDaysPerYear: 0,
+    isActive: true
   });
-  
+
   const { organization } = useOrganization();
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (organization?.id) {
-      fetchTimeOffTypes();
-    }
-  }, [organization?.id]);
+  const utils = trpc.useUtils();
+  const { data: timeOffTypesRaw, isLoading: loading } = trpc.timeOff.listTypes.useQuery();
+  const timeOffTypes: TimeOffType[] = (timeOffTypesRaw || []) as TimeOffType[];
 
-  const fetchTimeOffTypes = async () => {
-    if (!organization?.id) return;
-    
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('time_off_types')
-      .select('*')
-      .eq('organization_id', organization.id)
-      .order('name');
+  const createType = trpc.timeOff.createType.useMutation({
+    onSuccess: () => {
+      utils.timeOff.listTypes.invalidate();
+      toast({ title: "Success", description: "Time off type created" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create time off type", variant: "destructive" });
+    },
+  });
 
-    if (error) {
-      console.error('Error fetching time off types:', error);
-      toast({ title: "Error", description: "Failed to load time off types", variant: "destructive" });
-    } else {
-      setTimeOffTypes(data || []);
-    }
-    setLoading(false);
-  };
+  // TODO: No timeOff.updateType or timeOff.deleteType tRPC routes available yet
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization?.id) return;
 
     if (editingType) {
-      const { error } = await supabase
-        .from('time_off_types')
-        .update({
-          name: formData.name,
-          description: formData.description || null,
-          default_days_per_year: formData.default_days_per_year,
-          is_active: formData.is_active
-        })
-        .eq('id', editingType.id);
-
-      if (error) {
-        toast({ title: "Error", description: "Failed to update time off type", variant: "destructive" });
-      } else {
-        toast({ title: "Success", description: "Time off type updated" });
-        fetchTimeOffTypes();
-        resetForm();
-      }
-    } else {
-      const { error } = await supabase
-        .from('time_off_types')
-        .insert({
-          organization_id: organization.id,
-          name: formData.name,
-          description: formData.description || null,
-          default_days_per_year: formData.default_days_per_year,
-          is_active: formData.is_active
-        });
-
-      if (error) {
-        toast({ title: "Error", description: "Failed to create time off type", variant: "destructive" });
-      } else {
-        toast({ title: "Success", description: "Time off type created" });
-        fetchTimeOffTypes();
-        resetForm();
-      }
+      // TODO: Add timeOff.updateType tRPC route
+      toast({ title: "Not available", description: "Time off type editing is coming soon", variant: "destructive" });
+      return;
     }
+
+    createType.mutate({
+      name: formData.name,
+      description: formData.description || undefined,
+      defaultDaysPerYear: formData.defaultDaysPerYear,
+    });
   };
 
   const handleEdit = (timeOffType: TimeOffType) => {
@@ -108,29 +72,20 @@ export const TimeOffTypesManagement: React.FC = () => {
     setFormData({
       name: timeOffType.name,
       description: timeOffType.description || '',
-      default_days_per_year: timeOffType.default_days_per_year || 0,
-      is_active: timeOffType.is_active
+      defaultDaysPerYear: timeOffType.defaultDaysPerYear || 0,
+      isActive: timeOffType.isActive
     });
     setDialogOpen(true);
   };
 
   const handleDelete = async (id: string) => {
-    const { error } = await supabase
-      .from('time_off_types')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      toast({ title: "Error", description: "Failed to delete time off type", variant: "destructive" });
-    } else {
-      toast({ title: "Success", description: "Time off type deleted" });
-      fetchTimeOffTypes();
-    }
+    // TODO: Add timeOff.deleteType tRPC route
+    toast({ title: "Not available", description: "Time off type deletion is coming soon", variant: "destructive" });
   };
 
   const resetForm = () => {
     setEditingType(null);
-    setFormData({ name: '', description: '', default_days_per_year: 0, is_active: true });
+    setFormData({ name: '', description: '', defaultDaysPerYear: 0, isActive: true });
     setDialogOpen(false);
   };
 
@@ -189,15 +144,15 @@ export const TimeOffTypesManagement: React.FC = () => {
                   type="number"
                   min="0"
                   step="0.5"
-                  value={formData.default_days_per_year}
-                  onChange={(e) => setFormData({ ...formData, default_days_per_year: parseFloat(e.target.value) || 0 })}
+                  value={formData.defaultDaysPerYear}
+                  onChange={(e) => setFormData({ ...formData, defaultDaysPerYear: parseFloat(e.target.value) || 0 })}
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <Switch
                   id="active"
-                  checked={formData.is_active}
-                  onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
+                  checked={formData.isActive}
+                  onCheckedChange={(checked) => setFormData({ ...formData, isActive: checked })}
                 />
                 <Label htmlFor="active">Active</Label>
               </div>
@@ -235,12 +190,12 @@ export const TimeOffTypesManagement: React.FC = () => {
                 <TableRow key={type.id}>
                   <TableCell className="font-medium">{type.name}</TableCell>
                   <TableCell className="text-muted-foreground">{type.description || '-'}</TableCell>
-                  <TableCell>{type.default_days_per_year || '-'}</TableCell>
+                  <TableCell>{type.defaultDaysPerYear || '-'}</TableCell>
                   <TableCell>
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                      type.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                      type.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
                     }`}>
-                      {type.is_active ? 'Active' : 'Inactive'}
+                      {type.isActive ? 'Active' : 'Inactive'}
                     </span>
                   </TableCell>
                   <TableCell>

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,107 +16,59 @@ interface IncentiveSubmissionFormProps {
   onSuccess: () => void;
 }
 
-interface IncentiveType {
-  id: string;
-  name: string;
-  default_points: number;
-  description: string | null;
-}
-
 export function IncentiveSubmissionForm({ onClose, onSuccess }: IncentiveSubmissionFormProps) {
   const { user } = useAuth();
   const { organization } = useOrganization();
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
-  const [incentiveTypes, setIncentiveTypes] = useState<IncentiveType[]>([]);
   const [incentiveTypeId, setIncentiveTypeId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [evidenceUrl, setEvidenceUrl] = useState('');
 
-  useEffect(() => {
-    fetchIncentiveTypes();
-  }, [organization]);
+  const { data: incentiveTypes = [] } = trpc.incentives.listTypes.useQuery(
+    undefined,
+    { enabled: !!organization }
+  );
 
-  const fetchIncentiveTypes = async () => {
-    if (!organization) return;
+  // Set default type when types load
+  const activeTypes = (incentiveTypes as Array<{ id: string; name: string; defaultPoints: number; isActive?: boolean }>).filter((t) => t.isActive !== false);
 
-    try {
-      const { data, error } = await supabase
-        .from('incentive_types')
-        .select('id, name, default_points, description')
-        .eq('organization_id', organization.id)
-        .eq('is_active', true)
-        .order('name');
+  const selectedType = activeTypes.find((t) => t.id === incentiveTypeId);
 
-      if (error) throw error;
-      setIncentiveTypes(data || []);
-      if (data && data.length > 0) {
-        setIncentiveTypeId(data[0].id);
-      }
-    } catch (error) {
-      console.error('Error fetching incentive types:', error);
-    }
-  };
+  // Auto-select first type if none selected
+  if (!incentiveTypeId && activeTypes.length > 0) {
+    setIncentiveTypeId(activeTypes[0].id);
+  }
 
-  const selectedType = incentiveTypes.find(t => t.id === incentiveTypeId);
+  const createIncentive = trpc.incentives.create.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Incentive submitted', description: 'Your achievement has been submitted for review.' });
+      onSuccess();
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to submit incentive.', variant: 'destructive' });
+    },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !organization || !selectedType) return;
 
     if (!title.trim()) {
-      toast({
-        title: 'Title required',
-        description: 'Please enter a title for your incentive.',
-        variant: 'destructive',
-      });
+      toast({ title: 'Title required', description: 'Please enter a title for your incentive.', variant: 'destructive' });
       return;
     }
 
-    setLoading(true);
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!profile) throw new Error('Profile not found');
-
-      const { error } = await (supabase
-        .from('incentives' as any)
-        .insert({
-          profile_id: profile.id,
-          organization_id: organization.id,
-          incentive_type: selectedType.name,
-          title: title.trim(),
-          description: description || null,
-          evidence_url: evidenceUrl || null,
-          points: selectedType.default_points,
-          status: 'pending',
-        }) as any);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Incentive submitted',
-        description: 'Your achievement has been submitted for review.',
-      });
-      onSuccess();
-    } catch (error) {
-      console.error('Error submitting incentive:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to submit incentive.',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
+    createIncentive.mutate({
+      title: title.trim(),
+      description: description || undefined,
+      incentiveType: selectedType.name,
+      evidenceUrl: evidenceUrl || undefined,
+      points: selectedType.defaultPoints,
+    });
   };
 
-  if (incentiveTypes.length === 0) {
+  if (activeTypes.length === 0) {
     return (
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -151,9 +103,9 @@ export function IncentiveSubmissionForm({ onClose, onSuccess }: IncentiveSubmiss
                 <SelectValue placeholder="Select type" />
               </SelectTrigger>
               <SelectContent>
-                {incentiveTypes.map((type) => (
+                {activeTypes.map((type) => (
                   <SelectItem key={type.id} value={type.id}>
-                    {type.name} ({type.default_points} pts)
+                    {type.name} ({type.defaultPoints} pts)
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -196,8 +148,8 @@ export function IncentiveSubmissionForm({ onClose, onSuccess }: IncentiveSubmiss
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Submitting...' : 'Submit'}
+            <Button type="submit" disabled={createIncentive.isPending}>
+              {createIncentive.isPending ? 'Submitting...' : 'Submit'}
             </Button>
           </div>
         </form>

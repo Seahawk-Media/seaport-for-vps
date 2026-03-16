@@ -1,23 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import React, { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Briefcase, Edit, Trash2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
 interface PositionRole {
   id: string;
   title: string;
   description: string | null;
-  created_at: string;
+  createdAt: string;
 }
 
 export const PositionManagement: React.FC = () => {
-  const [positions, setPositions] = useState<PositionRole[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPosition, setEditingPosition] = useState<PositionRole | null>(null);
   const [formData, setFormData] = useState({
@@ -26,76 +24,35 @@ export const PositionManagement: React.FC = () => {
   });
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchPositions();
-  }, []);
+  const utils = trpc.useUtils();
+  const { data: positionsRaw, isLoading: loading } = trpc.positions.listRoles.useQuery();
+  const positions: PositionRole[] = (positionsRaw || []) as PositionRole[];
 
-  const fetchPositions = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('position_roles')
-        .select('*')
-        .order('title');
+  const createPosition = trpc.positions.createRole.useMutation({
+    onSuccess: () => {
+      utils.positions.listRoles.invalidate();
+      toast({ title: "Success", description: "Position created successfully" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save position", variant: "destructive" });
+    },
+  });
 
-      if (error) throw error;
-      setPositions(data || []);
-    } catch (error) {
-      console.error('Error fetching positions:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch positions",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Note: No update/delete routes provided for positions, keeping UI but logging warning
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
-    try {
-      const positionData = {
-        title: formData.title,
-        description: formData.description || null
-      };
-
-      if (editingPosition) {
-        const { error } = await supabase
-          .from('position_roles')
-          .update(positionData)
-          .eq('id', editingPosition.id);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Position updated successfully"
-        });
-      } else {
-        const { error } = await supabase
-          .from('position_roles')
-          .insert([positionData]);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Position created successfully"
-        });
-      }
-
-      resetForm();
-      fetchPositions();
-    } catch (error) {
-      console.error('Error saving position:', error);
-      toast({
-        title: "Error",
-        description: "Failed to save position",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
+    if (editingPosition) {
+      // TODO: Add positions.updateRole tRPC route
+      toast({ title: "Not available", description: "Position editing is coming soon", variant: "destructive" });
+      return;
     }
+
+    createPosition.mutate({
+      title: formData.title,
+      description: formData.description || undefined,
+    });
   };
 
   const handleEdit = (position: PositionRole) => {
@@ -109,28 +66,8 @@ export const PositionManagement: React.FC = () => {
 
   const handleDelete = async (positionId: string) => {
     if (!confirm('Are you sure you want to delete this position?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('position_roles')
-        .delete()
-        .eq('id', positionId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "Position deleted successfully"
-      });
-      fetchPositions();
-    } catch (error) {
-      console.error('Error deleting position:', error);
-      toast({
-        title: "Error",
-        description: "Failed to delete position",
-        variant: "destructive"
-      });
-    }
+    // TODO: Add positions.deleteRole tRPC route
+    toast({ title: "Not available", description: "Position deletion is coming soon", variant: "destructive" });
   };
 
   const resetForm = () => {
@@ -152,7 +89,7 @@ export const PositionManagement: React.FC = () => {
             Create and manage job titles and positions
           </p>
         </div>
-        <Button 
+        <Button
           onClick={() => setShowForm(true)}
           className="flex items-center gap-2"
         >
@@ -193,7 +130,7 @@ export const PositionManagement: React.FC = () => {
 
 
               <div className="flex gap-2">
-                <Button type="submit" disabled={loading}>
+                <Button type="submit" disabled={createPosition.isPending}>
                   {editingPosition ? 'Update' : 'Create'} Position
                 </Button>
                 <Button type="button" variant="outline" onClick={resetForm}>

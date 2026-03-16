@@ -5,7 +5,7 @@ import { UserProfileDropdown } from "@/components/navigation/UserProfileDropdown
 import { AppLauncher } from "@/components/navigation/AppLauncher";
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
 
 interface DashboardLayoutProps {
@@ -29,26 +29,21 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 }) => {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
-  
+
   // Track page views automatically
   useActivityLogger();
 
-  const handleViewModeChange = async (mode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => {
-    if (mode === 'my-journey') {
-      // Navigate to the user's journey page
-      if (!user) return;
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+  const { data: profile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-      if (profile) {
-        navigate(`/journey/${profile.id}`);
-      }
+  const handleViewModeChange = (mode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => {
+    if (mode === 'my-journey') {
+      if (!user || !profile) return;
+      navigate(`/journey/${profile.id}`);
       return;
     }
-    
+
     if (onViewModeChange) {
       onViewModeChange(mode);
     } else {
@@ -57,17 +52,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     }
   };
 
-  const handleMyJourneyClick = async () => {
-    if (!user) return;
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single();
-
-    if (profile) {
-      navigate(`/journey/${profile.id}`);
-    }
+  const handleMyJourneyClick = () => {
+    if (!user || !profile) return;
+    navigate(`/journey/${profile.id}`);
   };
 
   const handleSettingsClick = () => {

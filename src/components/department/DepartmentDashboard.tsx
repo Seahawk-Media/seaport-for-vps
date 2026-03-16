@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ArrowLeft, Building2, Crown, Users, UserPlus, Edit } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 
@@ -14,21 +14,12 @@ interface DepartmentDashboardProps {
   onEmployeeClick?: (employeeId: string) => void;
 }
 
-interface Department {
-  id: string;
-  name: string;
-  description: string | null;
-  parent_id: string | null;
-  head_id: string | null;
-  organization_id: string;
-}
-
 interface Profile {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
-  avatar_url: string | null;
-  job_title: string | null;
+  avatarUrl: string | null;
+  jobTitle: string | null;
   status: string | null;
   location: string | null;
 }
@@ -38,79 +29,43 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
   onBack,
   onEmployeeClick
 }) => {
-  const [department, setDepartment] = useState<Department | null>(null);
-  const [departmentHead, setDepartmentHead] = useState<Profile | null>(null);
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [parentDepartment, setParentDepartment] = useState<{ id: string; name: string } | null>(null);
-  const [childDepartments, setChildDepartments] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   const { isAdmin, isSuperAdmin } = useRole();
 
-  useEffect(() => {
-    fetchDepartmentData();
-  }, [departmentId]);
+  const { data: department, isLoading: deptLoading } = trpc.departments.get.useQuery(
+    { id: departmentId },
+  );
 
-  const fetchDepartmentData = async () => {
-    try {
-      // Fetch department
-      const { data: deptData, error: deptError } = await supabase
-        .from('departments')
-        .select('*')
-        .eq('id', departmentId)
-        .single();
+  const { data: departmentHead } = trpc.profiles.get.useQuery(
+    { id: department?.headId! },
+    { enabled: !!department?.headId }
+  );
 
-      if (deptError) throw deptError;
-      setDepartment(deptData);
+  // Fetch parent department
+  const { data: parentDepartment } = trpc.departments.get.useQuery(
+    { id: department?.parentId! },
+    { enabled: !!department?.parentId }
+  );
 
-      // Fetch department head if exists
-      if (deptData.head_id) {
-        const { data: headData } = await supabase
-          .from('profiles')
-          .select('id, full_name, email, avatar_url, job_title, status, location')
-          .eq('id', deptData.head_id)
-          .single();
-        setDepartmentHead(headData);
-      }
+  // Fetch child departments
+  const { data: allDepartments } = trpc.departments.list.useQuery();
+  const childDepartments = (allDepartments || []).filter((d: any) => d.parentId === departmentId);
 
-      // Fetch parent department if exists
-      if (deptData.parent_id) {
-        const { data: parentData } = await supabase
-          .from('departments')
-          .select('id, name')
-          .eq('id', deptData.parent_id)
-          .single();
-        setParentDepartment(parentData);
-      }
+  // Fetch members
+  const { data: allProfiles } = trpc.profiles.list.useQuery();
+  const members: Profile[] = (allProfiles || [])
+    .filter((p: any) => p.departmentId === departmentId)
+    .map((p: any) => ({
+      id: p.id,
+      fullName: p.fullName || '',
+      email: p.email || '',
+      avatarUrl: p.avatarUrl ?? null,
+      jobTitle: p.jobTitle ?? null,
+      status: p.status ?? null,
+      location: p.location ?? null,
+    }));
 
-      // Fetch child departments
-      const { data: childData } = await supabase
-        .from('departments')
-        .select('id, name')
-        .eq('parent_id', departmentId);
-      setChildDepartments(childData || []);
-
-      // Fetch members
-      const { data: membersData, error: membersError } = await supabase
-        .from('profiles')
-        .select('id, full_name, email, avatar_url, job_title, status, location')
-        .eq('department_id', departmentId)
-        .order('full_name');
-
-      if (membersError) throw membersError;
-      setMembers(membersData || []);
-
-    } catch (error) {
-      console.error('Error fetching department data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load department data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = deptLoading;
 
   const getInitials = (name: string) => {
     return name?.split(' ').map(n => n[0]).join('').toUpperCase() || '??';
@@ -212,7 +167,7 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
         </Card>
 
         {departmentHead && (
-          <Card 
+          <Card
             className="cursor-pointer hover:shadow-md transition-shadow"
             onClick={() => onEmployeeClick?.(departmentHead.id)}
           >
@@ -220,13 +175,13 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <Avatar className="h-12 w-12">
-                    <AvatarImage src={departmentHead.avatar_url || ''} />
-                    <AvatarFallback>{getInitials(departmentHead.full_name)}</AvatarFallback>
+                    <AvatarImage src={departmentHead.avatarUrl || ''} />
+                    <AvatarFallback>{getInitials(departmentHead.fullName || '')}</AvatarFallback>
                   </Avatar>
                   <Crown className="absolute -top-1 -right-1 h-5 w-5 text-yellow-500" />
                 </div>
                 <div>
-                  <p className="font-semibold">{departmentHead.full_name}</p>
+                  <p className="font-semibold">{departmentHead.fullName}</p>
                   <p className="text-sm text-muted-foreground">Department Head</p>
                 </div>
               </div>
@@ -246,7 +201,7 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {childDepartments.map(child => (
+              {childDepartments.map((child: any) => (
                 <Badge key={child.id} variant="secondary" className="text-sm py-1 px-3">
                   {child.name}
                 </Badge>
@@ -283,8 +238,8 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {members.map(member => (
-                <Card 
-                  key={member.id} 
+                <Card
+                  key={member.id}
                   className="hover:shadow-md transition-shadow cursor-pointer"
                   onClick={() => onEmployeeClick?.(member.id)}
                 >
@@ -292,8 +247,8 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
                     <div className="flex items-center gap-3">
                       <div className="relative">
                         <Avatar className="h-12 w-12">
-                          <AvatarImage src={member.avatar_url || ''} />
-                          <AvatarFallback>{getInitials(member.full_name)}</AvatarFallback>
+                          <AvatarImage src={member.avatarUrl || ''} />
+                          <AvatarFallback>{getInitials(member.fullName)}</AvatarFallback>
                         </Avatar>
                         <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(member.status)}`} />
                         {departmentHead?.id === member.id && (
@@ -302,12 +257,12 @@ export const DepartmentDashboard: React.FC<DepartmentDashboardProps> = ({
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1">
-                          <h4 className="font-semibold text-sm truncate">{member.full_name}</h4>
+                          <h4 className="font-semibold text-sm truncate">{member.fullName}</h4>
                         </div>
                         <p className="text-xs text-muted-foreground truncate">{member.email}</p>
-                        {member.job_title && (
+                        {member.jobTitle && (
                           <Badge variant="outline" className="text-xs mt-1">
-                            {member.job_title}
+                            {member.jobTitle}
                           </Badge>
                         )}
                       </div>

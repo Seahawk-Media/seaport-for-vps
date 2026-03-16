@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Check, Eye, EyeOff, KeyRound, Loader2, Trash2, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useToast } from '@/hooks/use-toast';
 
@@ -79,7 +79,7 @@ const PROVIDERS: ProviderDef[] = [
 
 interface ProviderCardProps {
   def: ProviderDef;
-  saved: { is_enabled: boolean; api_key_hint: string | null } | null;
+  saved: { isEnabled: boolean; apiKeyHint: string | null } | null;
   onSave: (providerId: string, apiKey: string) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
 }
@@ -90,7 +90,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({ def, saved, onSave, onRemov
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
 
-  const isConnected = !!saved?.is_enabled;
+  const isConnected = !!saved?.isEnabled;
 
   const handleSave = async () => {
     if (!apiKey.trim()) return;
@@ -125,8 +125,8 @@ const ProviderCard: React.FC<ProviderCardProps> = ({ def, saved, onSave, onRemov
           </div>
           <div>
             <p className={cn('text-sm font-semibold', isConnected ? 'text-background' : 'text-foreground')}>{def.name}</p>
-            {isConnected && saved?.api_key_hint && (
-              <p className="text-[10px] font-mono text-background/50">••••{saved.api_key_hint}</p>
+            {isConnected && saved?.apiKeyHint && (
+              <p className="text-[10px] font-mono text-background/50">····{saved.apiKeyHint}</p>
             )}
           </div>
         </div>
@@ -212,59 +212,46 @@ const ProviderCard: React.FC<ProviderCardProps> = ({ def, saved, onSave, onRemov
 export const AIModelsManagement: React.FC = () => {
   const { organization } = useOrganization();
   const { toast } = useToast();
-  const [configs, setConfigs] = useState<Record<string, { is_enabled: boolean; api_key_hint: string | null }>>({});
-  const [loading, setLoading] = useState(true);
 
-  const fetchConfigs = async () => {
-    if (!organization) return;
-    const { data } = await supabase
-      .from('org_ai_config')
-      .select('provider, is_enabled, api_key_hint')
-      .eq('organization_id', organization.id);
+  const utils = trpc.useUtils();
+  const { data: configList = [], isLoading: loading } = trpc.aiConfig.list.useQuery(undefined, {
+    enabled: !!organization,
+  });
 
-    const map: typeof configs = {};
-    for (const row of data ?? []) {
-      map[row.provider] = { is_enabled: row.is_enabled, api_key_hint: row.api_key_hint };
-    }
-    setConfigs(map);
-    setLoading(false);
-  };
+  const upsertMutation = trpc.aiConfig.upsert.useMutation({
+    onSuccess: () => { utils.aiConfig.list.invalidate(); },
+  });
 
-  useEffect(() => { fetchConfigs(); }, [organization]);
+  // Build a lookup map from provider to config
+  const configs: Record<string, { isEnabled: boolean; apiKeyHint: string | null }> = {};
+  for (const row of configList) {
+    configs[row.provider] = { isEnabled: row.isEnabled ?? false, apiKeyHint: row.apiKeyHint };
+  }
 
   const handleSave = async (provider: string, apiKey: string) => {
     if (!organization) return;
     const hint = apiKey.slice(-4);
-    const { error } = await supabase
-      .from('org_ai_config')
-      .upsert(
-        { organization_id: organization.id, provider, api_key_hint: hint, is_enabled: true },
-        { onConflict: 'organization_id,provider' }
-      );
-    if (error) {
-      toast({ title: 'Error saving key', description: error.message, variant: 'destructive' });
-      return;
+    try {
+      await upsertMutation.mutateAsync({ provider, apiKeyHint: hint, isEnabled: true });
+      toast({ title: `${provider} connected`, description: 'API key saved. Agents can now use this provider.' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      toast({ title: 'Error saving key', description: message, variant: 'destructive' });
     }
-    toast({ title: `${provider} connected`, description: 'API key saved. Agents can now use this provider.' });
-    fetchConfigs();
   };
 
   const handleRemove = async (provider: string) => {
     if (!organization) return;
-    const { error } = await supabase
-      .from('org_ai_config')
-      .update({ is_enabled: false, api_key_hint: null })
-      .eq('organization_id', organization.id)
-      .eq('provider', provider);
-    if (error) {
-      toast({ title: 'Error removing key', description: error.message, variant: 'destructive' });
-      return;
+    try {
+      await upsertMutation.mutateAsync({ provider, apiKeyHint: undefined, isEnabled: false });
+      toast({ title: `${provider} disconnected` });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      toast({ title: 'Error removing key', description: message, variant: 'destructive' });
     }
-    toast({ title: `${provider} disconnected` });
-    fetchConfigs();
   };
 
-  const connectedCount = Object.values(configs).filter(c => c.is_enabled).length;
+  const connectedCount = Object.values(configs).filter(c => c.isEnabled).length;
 
   return (
     <div className="space-y-6">

@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 import { Crown } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { TeamsGridTab } from "@/components/workspace/tabs/TeamsGridTab";
@@ -28,19 +28,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'agents',      label: 'Agents'      },
 ];
 
-interface DeptMeta {
-  id: string;
-  name: string;
-  description: string | null;
-  head_id: string | null;
-}
-
-interface HeadProfile {
-  id: string;
-  full_name: string;
-  avatar_url: string | null;
-}
-
 interface DepartmentWorkspaceProps {
   departmentId: string;
   /** If true, show department name + meta inline (for dashboard use) */
@@ -54,46 +41,24 @@ export const DepartmentWorkspace: React.FC<DepartmentWorkspaceProps> = ({
   departmentId,
   showHeader = false,
 }) => {
-  const [department, setDepartment] = useState<DeptMeta | null>(null);
-  const [head, setHead] = useState<HeadProfile | null>(null);
-  const [memberCount, setMemberCount] = useState(0);
   const [activeTab, setActiveTab] = useState<Tab>('functions');
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
-    setLoading(true);
     setActiveTab('functions');
-    fetchData();
   }, [departmentId]);
 
-  const fetchData = async () => {
-    try {
-      const { data: dept, error } = await supabase
-        .from('departments')
-        .select('*')
-        .eq('id', departmentId)
-        .single();
+  const { data: department, isLoading: loading } = trpc.departments.get.useQuery(
+    { id: departmentId },
+  );
 
-      if (error) throw error;
-      setDepartment(dept);
+  const { data: head } = trpc.profiles.get.useQuery(
+    { id: department?.headId! },
+    { enabled: !!department?.headId }
+  );
 
-      const [headRes, countRes] = await Promise.all([
-        dept.head_id
-          ? supabase.from('profiles').select('id, full_name, avatar_url').eq('id', dept.head_id).single()
-          : Promise.resolve({ data: null }),
-        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('department_id', departmentId),
-      ]);
-
-      setHead((headRes as any).data ?? null);
-      setMemberCount((countRes as any).count ?? 0);
-    } catch (err) {
-      console.error(err);
-      toast({ title: "Error", description: "Failed to load department", variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data: allProfiles } = trpc.profiles.list.useQuery();
+  const memberCount = (allProfiles || []).filter((p: any) => p.departmentId === departmentId).length;
 
   if (loading) {
     return (
@@ -108,7 +73,6 @@ export const DepartmentWorkspace: React.FC<DepartmentWorkspaceProps> = ({
   const renderContent = () => {
     switch (activeTab) {
       case 'functions':   return <TeamsGridTab departmentId={departmentId} />;
-      // Department-level master list: show ALL resources in the dept (incl. those inside functions)
       case 'measurables': return <MeasurablesTab departmentId={departmentId} />;
       case 'tools':       return <ToolsTab departmentId={departmentId} showDeptAll />;
       case 'meetings':    return <MeetingsTab departmentId={departmentId} showDeptAll />;
@@ -132,10 +96,10 @@ export const DepartmentWorkspace: React.FC<DepartmentWorkspaceProps> = ({
               {head && (
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Avatar className="h-4 w-4">
-                    <AvatarImage src={head.avatar_url || ''} />
-                    <AvatarFallback className="text-[10px]">{getInitials(head.full_name)}</AvatarFallback>
+                    <AvatarImage src={head.avatarUrl || ''} />
+                    <AvatarFallback className="text-[10px]">{getInitials(head.fullName || '')}</AvatarFallback>
                   </Avatar>
-                  <span>{head.full_name}</span>
+                  <span>{head.fullName}</span>
                   <Crown className="h-3 w-3 text-primary" />
                 </div>
               )}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Plus, Trash2, GripVertical, Save } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -22,7 +22,7 @@ interface CoursePage {
   id?: string;
   title: string;
   content: string;
-  page_order: number;
+  pageOrder: number;
 }
 
 interface CourseEditorProps {
@@ -38,34 +38,27 @@ export const CourseEditor = ({ course, onClose }: CourseEditorProps) => {
   const [status, setStatus] = useState(course?.status || 'draft');
   const [pages, setPages] = useState<CoursePage[]>([]);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(!!course);
+
+  const { data: existingPages, isLoading: loading } = trpc.academy.listPages.useQuery(
+    { courseId: course?.id ?? '' },
+    { enabled: !!course }
+  );
+
+  const createCourseMutation = trpc.academy.createCourse.useMutation();
+  const updateCourseMutation = trpc.academy.updateCourse.useMutation();
+  const createPageMutation = trpc.academy.createPage.useMutation();
 
   useEffect(() => {
-    if (course) {
-      fetchPages();
+    if (existingPages) {
+      const sorted = [...existingPages].sort((a, b) => ((a as Record<string, unknown>).pageOrder as number ?? 0) - ((b as Record<string, unknown>).pageOrder as number ?? 0));
+      setPages(sorted.map((p) => ({
+        id: p.id,
+        title: p.title,
+        content: p.content || '',
+        pageOrder: p.pageOrder ?? 0,
+      })));
     }
-  }, [course]);
-
-  const fetchPages = async () => {
-    if (!course) return;
-    setLoading(true);
-
-    try {
-      const { data, error } = await supabase
-        .from('course_pages')
-        .select('*')
-        .eq('course_id', course.id)
-        .order('page_order', { ascending: true });
-
-      if (error) throw error;
-      setPages(data || []);
-    } catch (error) {
-      console.error('Error fetching pages:', error);
-      toast.error('Failed to load course pages');
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [existingPages]);
 
   const handleAddPage = () => {
     setPages([
@@ -73,15 +66,14 @@ export const CourseEditor = ({ course, onClose }: CourseEditorProps) => {
       {
         title: `Page ${pages.length + 1}`,
         content: '',
-        page_order: pages.length,
+        pageOrder: pages.length,
       },
     ]);
   };
 
   const handleRemovePage = (index: number) => {
     const newPages = pages.filter((_, i) => i !== index);
-    // Reorder remaining pages
-    setPages(newPages.map((p, i) => ({ ...p, page_order: i })));
+    setPages(newPages.map((p, i) => ({ ...p, pageOrder: i })));
   };
 
   const handlePageChange = (index: number, field: 'title' | 'content', value: string) => {
@@ -103,59 +95,34 @@ export const CourseEditor = ({ course, onClose }: CourseEditorProps) => {
       let courseId = course?.id;
 
       if (courseId) {
-        // Update existing course
-        const { error } = await supabase
-          .from('courses')
-          .update({
-            title: title.trim(),
-            description: description.trim() || null,
-            status,
-          })
-          .eq('id', courseId);
-
-        if (error) throw error;
+        await updateCourseMutation.mutateAsync({
+          id: courseId,
+          title: title.trim(),
+          description: description.trim() || undefined,
+          status: status as 'draft' | 'published' | 'archived',
+        });
       } else {
-        // Create new course
-        const { data, error } = await supabase
-          .from('courses')
-          .insert({
-            title: title.trim(),
-            description: description.trim() || null,
-            status,
-            organization_id: organization.id,
-            created_by: user.id,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-        courseId = data.id;
+        const newCourse = await createCourseMutation.mutateAsync({
+          title: title.trim(),
+          description: description.trim() || undefined,
+        });
+        courseId = newCourse.id;
       }
 
-      // Delete existing pages and recreate
-      if (course) {
-        await supabase.from('course_pages').delete().eq('course_id', courseId);
-      }
-
-      // Insert pages
-      if (pages.length > 0) {
-        const { error: pagesError } = await supabase.from('course_pages').insert(
-          pages.map((page, index) => ({
-            course_id: courseId,
-            organization_id: organization.id,
-            title: page.title,
-            content: page.content,
-            page_order: index,
-          }))
-        );
-
-        if (pagesError) throw pagesError;
+      // Create pages (the backend createPage adds one at a time)
+      for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
+        await createPageMutation.mutateAsync({
+          courseId: courseId!,
+          title: page.title,
+          content: page.content,
+          pageOrder: i,
+        });
       }
 
       toast.success(course ? 'Course updated' : 'Course created');
       onClose();
-    } catch (error) {
-      console.error('Error saving course:', error);
+    } catch {
       toast.error('Failed to save course');
     } finally {
       setSaving(false);

@@ -1,40 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { format } from 'date-fns';
 import { Briefcase, Calendar, TrendingUp } from 'lucide-react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 
-interface ProfileData {
-  id: string;
-  full_name: string;
-  job_title: string | null;
-  position: {
-    title: string;
-    description: string | null;
-  } | null;
-}
-
-interface Promotion {
-  id: string;
-  role_title: string | null;
-  salary_band: string | null;
-  next_review_date: string | null;
-  last_review_date: string | null;
-  notes: string | null;
-}
-
 export default function MePromotionsPage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [promotion, setPromotion] = useState<Promotion | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -42,44 +20,19 @@ export default function MePromotionsPage() {
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!user) return;
+  const { data: myProfile, isLoading: profileLoading } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-      try {
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select(`
-            id,
-            full_name,
-            job_title,
-            position:position_id(title, description)
-          `)
-          .eq('user_id', user.id)
-          .single();
+  const { data: promotionData, isLoading: promotionLoading } = trpc.promotions.get.useQuery(
+    { profileId: myProfile?.id ?? '' },
+    { enabled: !!myProfile?.id },
+  );
 
-        if (profileData) {
-          setProfile(profileData as unknown as ProfileData);
+  const loading = profileLoading || promotionLoading;
 
-          const { data: promotionData } = await (supabase
-            .from('promotions' as any)
-            .select('*')
-            .eq('profile_id', profileData.id)
-            .single() as any);
-
-          if (promotionData) {
-            setPromotion(promotionData as Promotion);
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching promotion data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [user]);
+  const promotion = promotionData ?? null;
+  const currentRole = promotion?.roleTitle || myProfile?.positionId || myProfile?.jobTitle || 'Not set';
 
   if (authLoading || loading) {
     return (
@@ -90,8 +43,6 @@ export default function MePromotionsPage() {
       </DashboardLayout>
     );
   }
-
-  const currentRole = promotion?.role_title || profile?.position?.title || profile?.job_title || 'Not set';
 
   return (
     <DashboardLayout title="Promotions" description="View your role and promotion information">
@@ -106,12 +57,9 @@ export default function MePromotionsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-semibold">{currentRole}</div>
-            {profile?.position?.description && (
-              <p className="text-muted-foreground mt-2">{profile.position.description}</p>
-            )}
-            {promotion?.salary_band && (
+            {promotion?.salaryBand && (
               <Badge variant="secondary" className="mt-3">
-                Band: {promotion.salary_band}
+                Band: {promotion.salaryBand}
               </Badge>
             )}
           </CardContent>
@@ -128,13 +76,13 @@ export default function MePromotionsPage() {
             </CardHeader>
             <CardContent>
               <div className="text-xl font-semibold">
-                {promotion?.next_review_date
-                  ? format(new Date(promotion.next_review_date), 'MMMM d, yyyy')
+                {promotion?.nextReviewDate
+                  ? format(new Date(promotion.nextReviewDate), 'MMMM d, yyyy')
                   : 'Not scheduled'}
               </div>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -144,8 +92,8 @@ export default function MePromotionsPage() {
             </CardHeader>
             <CardContent>
               <div className="text-xl font-semibold">
-                {promotion?.last_review_date
-                  ? format(new Date(promotion.last_review_date), 'MMMM d, yyyy')
+                {promotion?.lastReviewDate
+                  ? format(new Date(promotion.lastReviewDate), 'MMMM d, yyyy')
                   : 'No previous review'}
               </div>
             </CardContent>

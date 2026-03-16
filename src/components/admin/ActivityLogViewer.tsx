@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import React, { useState, useMemo } from 'react';
+import { trpc } from '@/lib/trpc';
 import { useOrganization } from '@/hooks/useOrganization';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -11,21 +10,6 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Activity, LogIn, Eye, MousePointer, RefreshCw, Search } from 'lucide-react';
 import { format } from 'date-fns';
-
-interface ActivityLog {
-  id: string;
-  profile_id: string;
-  activity_type: string;
-  description: string | null;
-  metadata: Record<string, unknown> | null;
-  page_path: string | null;
-  user_agent: string | null;
-  created_at: string;
-  profiles: {
-    full_name: string | null;
-    email: string | null;
-  } | null;
-}
 
 const activityTypeConfig: Record<string, { label: string; icon: React.ReactNode; variant: 'default' | 'secondary' | 'outline' }> = {
   login: { label: 'Login', icon: <LogIn className="h-3 w-3" />, variant: 'default' },
@@ -40,69 +24,56 @@ export const ActivityLogViewer: React.FC = () => {
   const [userFilter, setUserFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const { data: logs, isLoading, refetch } = useQuery({
-    queryKey: ['activity-logs', organization?.id, activityFilter],
-    queryFn: async () => {
-      if (!organization?.id) return [];
-      
-      let query = supabase
-        .from('activity_logs')
-        .select(`
-          id,
-          profile_id,
-          activity_type,
-          description,
-          metadata,
-          page_path,
-          user_agent,
-          created_at,
-          profiles!activity_logs_profile_id_fkey (
-            full_name,
-            email
-          )
-        `)
-        .eq('organization_id', organization.id)
-        .order('created_at', { ascending: false })
-        .limit(200);
+  const { data: logs, isLoading, refetch } = trpc.activity.list.useQuery(
+    { limit: 100 },
+    {
+      enabled: !!organization?.id,
+      refetchInterval: 30000,
+    }
+  );
 
-      if (activityFilter !== 'all') {
-        query = query.eq('activity_type', activityFilter);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data as ActivityLog[];
-    },
-    enabled: !!organization?.id,
-    refetchInterval: 30000, // Refresh every 30 seconds
-  });
-
-  const { data: users } = useQuery({
-    queryKey: ['org-users', organization?.id],
-    queryFn: async () => {
-      if (!organization?.id) return [];
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, email')
-        .eq('organization_id', organization.id);
-      if (error) throw error;
-      return data;
-    },
+  const { data: profiles } = trpc.profiles.list.useQuery(undefined, {
     enabled: !!organization?.id,
   });
 
-  const filteredLogs = logs?.filter(log => {
-    const matchesUser = userFilter === 'all' || !userFilter || log.profile_id === userFilter;
-    const matchesSearch = !searchQuery || 
-      log.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.page_path?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.profiles?.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.profiles?.email?.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesUser && matchesSearch;
-  }) || [];
+  // Build a lookup map from profileId to profile info
+  const profileMap = useMemo(() => {
+    const map = new Map<string, { fullName: string | null; email: string | null }>();
+    for (const p of profiles ?? []) {
+      map.set(p.id, { fullName: p.fullName, email: p.email });
+    }
+    return map;
+  }, [profiles]);
 
-  const getActivityBadge = (type: string) => {
-    const config = activityTypeConfig[type] || { label: type, icon: <Activity className="h-3 w-3" />, variant: 'outline' as const };
+  const filteredLogs = useMemo(() => {
+    let result = logs ?? [];
+
+    if (activityFilter !== 'all') {
+      result = result.filter(log => log.activityType === activityFilter);
+    }
+
+    if (userFilter && userFilter !== 'all') {
+      result = result.filter(log => log.profileId === userFilter);
+    }
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(log => {
+        const profile = log.profileId ? profileMap.get(log.profileId) : null;
+        return (
+          log.description?.toLowerCase().includes(q) ||
+          log.pagePath?.toLowerCase().includes(q) ||
+          profile?.fullName?.toLowerCase().includes(q) ||
+          profile?.email?.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    return result;
+  }, [logs, activityFilter, userFilter, searchQuery, profileMap]);
+
+  const getActivityBadge = (type: string | null) => {
+    const config = activityTypeConfig[type ?? ''] || { label: type ?? 'unknown', icon: <Activity className="h-3 w-3" />, variant: 'outline' as const };
     return (
       <Badge variant={config.variant} className="flex items-center gap-1 w-fit">
         {config.icon}
@@ -169,9 +140,9 @@ export const ActivityLogViewer: React.FC = () => {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Users</SelectItem>
-              {users?.map((user) => (
+              {profiles?.map((user) => (
                 <SelectItem key={user.id} value={user.id}>
-                  {user.full_name || user.email || 'Unknown'}
+                  {user.fullName || user.email || 'Unknown'}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -201,33 +172,36 @@ export const ActivityLogViewer: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredLogs.map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell className="whitespace-nowrap text-sm">
-                      {format(new Date(log.created_at), 'MMM d, HH:mm:ss')}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-medium text-sm">
-                          {log.profiles?.full_name || 'Unknown'}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {log.profiles?.email}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{getActivityBadge(log.activity_type)}</TableCell>
-                    <TableCell className="max-w-48 truncate text-sm">
-                      {log.description || '-'}
-                    </TableCell>
-                    <TableCell className="text-sm font-mono text-muted-foreground">
-                      {log.page_path || '-'}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {parseUserAgent(log.user_agent)}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredLogs.map((log) => {
+                  const profile = log.profileId ? profileMap.get(log.profileId) : null;
+                  return (
+                    <TableRow key={log.id}>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {format(new Date(log.createdAt), 'MMM d, HH:mm:ss')}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span className="font-medium text-sm">
+                            {profile?.fullName || 'Unknown'}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {profile?.email}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{getActivityBadge(log.activityType)}</TableCell>
+                      <TableCell className="max-w-48 truncate text-sm">
+                        {log.description || '-'}
+                      </TableCell>
+                      <TableCell className="text-sm font-mono text-muted-foreground">
+                        {log.pagePath || '-'}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {parseUserAgent(log.userAgent)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -237,8 +211,8 @@ export const ActivityLogViewer: React.FC = () => {
         {logs && logs.length > 0 && (
           <div className="mt-4 pt-4 border-t flex gap-6 text-sm text-muted-foreground">
             <span>Total: {filteredLogs.length} activities</span>
-            <span>Logins: {logs.filter(l => l.activity_type === 'login').length}</span>
-            <span>Page Views: {logs.filter(l => l.activity_type === 'page_view').length}</span>
+            <span>Logins: {logs.filter(l => l.activityType === 'login').length}</span>
+            <span>Page Views: {logs.filter(l => l.activityType === 'page_view').length}</span>
           </div>
         )}
       </CardContent>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Plus, CheckSquare, Edit, Trash2, Calendar, LayoutList, Columns, Tag } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useAuth } from "@/hooks/useAuth";
@@ -49,18 +49,18 @@ interface Task {
   description: string | null;
   status: string | null;
   priority: string | null;
-  due_date: string | null;
-  assigned_to: string | null;
-  team_id: string | null;
-  department_id: string | null;
+  dueDate: string | null;
+  assignedTo: string | null;
+  teamId: string | null;
+  departmentId: string | null;
   team?: Team | null;
-  assignee?: { id: string; full_name: string | null; avatar_url: string | null } | null;
+  assignee?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
 }
 
 interface Profile {
   id: string;
-  full_name: string | null;
-  avatar_url: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
 }
 
 const STATUS_CONFIG = {
@@ -117,9 +117,9 @@ const emptyForm = {
   description: '',
   status: 'todo',
   priority: 'medium',
-  due_date: '',
-  assigned_to: 'none',
-  team_id: 'none',
+  dueDate: '',
+  assignedTo: 'none',
+  teamId: 'none',
 };
 
 // Droppable column wrapper
@@ -184,16 +184,16 @@ const SortableKanbanCard = ({
         <PriorityBadge priority={task.priority} />
       </div>
       <div className="flex items-center justify-between mt-2">
-        {task.due_date ? (
+        {task.dueDate ? (
           <span className="text-xs text-muted-foreground flex items-center gap-1">
             <Calendar className="h-2.5 w-2.5" />
-            {format(new Date(task.due_date + 'T00:00:00'), 'MMM d')}
+            {format(new Date(task.dueDate + 'T00:00:00'), 'MMM d')}
           </span>
         ) : <span />}
         {task.assignee && (
           <Avatar className="h-5 w-5">
-            <AvatarImage src={task.assignee.avatar_url || ''} />
-            <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.full_name)}</AvatarFallback>
+            <AvatarImage src={task.assignee.avatarUrl || ''} />
+            <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.fullName)}</AvatarFallback>
           </Avatar>
         )}
       </div>
@@ -202,10 +202,6 @@ const SortableKanbanCard = ({
 };
 
 export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, departmentName, showDeptAll = false }) => {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [functions, setFunctions] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -219,97 +215,84 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
-  useEffect(() => {
-    fetchTasks();
-    fetchMembers();
-    if (departmentId && !teamId) fetchFunctions();
-  }, [departmentId, teamId]);
+  const utils = trpc.useUtils();
+  const tasksQuery = trpc.tasks.list.useQuery();
+  const profilesQuery = trpc.profiles.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
 
-  const fetchFunctions = async () => {
-    if (!departmentId) return;
-    const { data } = await supabase
-      .from('teams')
-      .select('id, name')
-      .eq('department_id', departmentId)
-      .order('name');
-    setFunctions(data || []);
-  };
+  const createMutation = trpc.tasks.create.useMutation({
+    onSuccess: () => {
+      toast({ title: "Task created" });
+      resetForm();
+      utils.tasks.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-  const fetchMembers = async () => {
-    let query = supabase.from('profiles').select('id, full_name, avatar_url');
-    if (teamId) {
-      const { data: tm } = await supabase.from('team_members').select('profile_id').eq('team_id', teamId);
-      const ids = tm?.map(r => r.profile_id) || [];
-      if (ids.length > 0) query = query.in('id', ids);
-    } else if (departmentId) {
-      query = query.eq('department_id', departmentId);
-    }
-    const { data } = await query.order('full_name');
-    setMembers(data || []);
-  };
+  const updateMutation = trpc.tasks.update.useMutation({
+    onSuccess: () => {
+      utils.tasks.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
-      let query = supabase
-        .from('tasks')
-        .select('*, team:teams(id, name), assignee:profiles!tasks_assigned_to_fkey(id, full_name, avatar_url)');
+  const deleteMutation = trpc.tasks.delete.useMutation({
+    onSuccess: () => {
+      toast({ title: "Task deleted" });
+      utils.tasks.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      if (teamId) {
-        query = query.eq('team_id', teamId);
-      } else if (departmentId) {
-        query = query.eq('department_id', departmentId);
-      }
+  const allTasks = (tasksQuery.data || []) as Task[];
+  const members = (profilesQuery.data || []) as Profile[];
+  const allTeams = (teamsQuery.data || []) as Array<{ id: string; name: string; departmentId: string | null }>;
+  const loading = tasksQuery.isLoading;
 
-      const { data, error } = await query.order('created_at', { ascending: false });
-      if (error) throw error;
-      setTasks((data || []) as unknown as Task[]);
-    } catch (error) {
-      console.error('Error fetching tasks:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Filter tasks based on scope
+  const tasks = allTasks.filter(task => {
+    if (teamId) return task.teamId === teamId;
+    if (departmentId) return task.departmentId === departmentId;
+    return true;
+  });
+
+  // Functions within the department
+  const functions = departmentId && !teamId
+    ? allTeams.filter(t => t.departmentId === departmentId)
+    : [];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization || !user) return;
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single();
-
-    const payload = {
-      title: formData.title,
-      description: formData.description || null,
-      status: formData.status,
-      priority: formData.priority,
-      due_date: formData.due_date || null,
-      assigned_to: formData.assigned_to === 'none' ? null : formData.assigned_to || null,
-      team_id: teamId || (formData.team_id === 'none' ? null : formData.team_id || null),
-    };
-
-    try {
-      if (editingTask) {
-        const { error } = await supabase.from('tasks').update(payload).eq('id', editingTask.id);
-        if (error) throw error;
-        toast({ title: "Task updated" });
-      } else {
-        const { error } = await supabase.from('tasks').insert({
-          ...payload,
-          organization_id: organization.id,
-          department_id: departmentId || null,
-          created_by: profile?.id || null,
-        });
-        if (error) throw error;
-        toast({ title: "Task created" });
-      }
+    if (editingTask) {
+      updateMutation.mutate({
+        id: editingTask.id,
+        title: formData.title,
+        description: formData.description || undefined,
+        status: formData.status,
+        priority: formData.priority,
+        dueDate: formData.dueDate || undefined,
+        assignedTo: formData.assignedTo === 'none' ? undefined : formData.assignedTo || undefined,
+      });
+      toast({ title: "Task updated" });
       resetForm();
-      fetchTasks();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } else {
+      createMutation.mutate({
+        title: formData.title,
+        description: formData.description || undefined,
+        priority: formData.priority,
+        dueDate: formData.dueDate || undefined,
+        assignedTo: formData.assignedTo === 'none' ? undefined : formData.assignedTo || undefined,
+        teamId: teamId || (formData.teamId === 'none' ? undefined : formData.teamId || undefined),
+        departmentId: departmentId || undefined,
+      });
     }
   };
 
@@ -319,14 +302,8 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
     setFormData(emptyForm);
   };
 
-  const handleDelete = async (id: string) => {
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Task deleted" });
-      fetchTasks();
-    }
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate({ id });
   };
 
   const openEdit = (task: Task) => {
@@ -336,16 +313,15 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
       description: task.description || '',
       status: task.status || 'todo',
       priority: task.priority || 'medium',
-      due_date: task.due_date || '',
-      assigned_to: task.assigned_to || 'none',
-      team_id: task.team_id || 'none',
+      dueDate: task.dueDate || '',
+      assignedTo: task.assignedTo || 'none',
+      teamId: task.teamId || 'none',
     });
     setDialogOpen(true);
   };
 
-  const quickStatusChange = async (taskId: string, newStatus: string) => {
-    const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
-    if (!error) fetchTasks();
+  const quickStatusChange = (taskId: string, newStatus: string) => {
+    updateMutation.mutate({ id: taskId, status: newStatus });
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -359,7 +335,6 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
     if (!over) return;
 
     const taskId = active.id as string;
-    // The over.id can be either a column id or a card id — find the column
     const overStatus = KANBAN_COLUMNS.includes(over.id as keyof typeof STATUS_CONFIG)
       ? (over.id as string)
       : tasks.find(t => t.id === over.id)?.status;
@@ -368,13 +343,7 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
     const task = tasks.find(t => t.id === taskId);
     if (!task || task.status === overStatus) return;
 
-    // Optimistic update
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: overStatus } : t));
-    const { error } = await supabase.from('tasks').update({ status: overStatus }).eq('id', taskId);
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-      fetchTasks();
-    }
+    updateMutation.mutate({ id: taskId, status: overStatus });
   };
 
   if (loading) {
@@ -454,15 +423,15 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
                 {task.assignee ? (
                   <div className="flex items-center gap-1.5">
                     <Avatar className="h-6 w-6">
-                      <AvatarImage src={task.assignee.avatar_url || ''} />
-                      <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.full_name)}</AvatarFallback>
+                      <AvatarImage src={task.assignee.avatarUrl || ''} />
+                      <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.fullName)}</AvatarFallback>
                     </Avatar>
                     <span className="text-xs text-muted-foreground truncate max-w-[60px] hidden sm:block">
-                      {task.assignee.full_name?.split(' ')[0]}
+                      {task.assignee.fullName?.split(' ')[0]}
                     </span>
                   </div>
                 ) : (
-                  <span className="text-xs text-muted-foreground/40">—</span>
+                  <span className="text-xs text-muted-foreground/40">-</span>
                 )}
               </div>
               <div className="w-24 flex justify-center">
@@ -478,13 +447,13 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
                 </Select>
               </div>
               <div className="w-20 flex justify-center">
-                {task.due_date ? (
+                {task.dueDate ? (
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
-                    {format(new Date(task.due_date + 'T00:00:00'), 'MMM d')}
+                    {format(new Date(task.dueDate + 'T00:00:00'), 'MMM d')}
                   </span>
                 ) : (
-                  <span className="text-xs text-muted-foreground/40">—</span>
+                  <span className="text-xs text-muted-foreground/40">-</span>
                 )}
               </div>
               <div className="w-16 flex justify-center gap-1">
@@ -499,7 +468,7 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
           ))}
         </div>
       ) : (
-        // KANBAN VIEW — drag-and-drop enabled
+        // KANBAN VIEW
         <DndContext
           sensors={sensors}
           collisionDetection={closestCorners}
@@ -589,11 +558,11 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
                 </Select>
               </div>
             </div>
-            {/* Function tag selector — only show when viewing dept-level (not locked to a function) */}
+            {/* Function tag selector */}
             {!teamId && functions.length > 0 && (
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Function tag</label>
-                <Select value={formData.team_id} onValueChange={(v) => setFormData({ ...formData, team_id: v })}>
+                <Select value={formData.teamId} onValueChange={(v) => setFormData({ ...formData, teamId: v })}>
                   <SelectTrigger><SelectValue placeholder="Department (no function)" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Department (no function)</SelectItem>
@@ -609,18 +578,18 @@ export const TasksTab: React.FC<TasksTabProps> = ({ departmentId, teamId, depart
                 <label className="text-xs text-muted-foreground">Due date</label>
                 <Input
                   type="date"
-                  value={formData.due_date}
-                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                  value={formData.dueDate}
+                  onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Assignee</label>
-                <Select value={formData.assigned_to} onValueChange={(v) => setFormData({ ...formData, assigned_to: v })}>
+                <Select value={formData.assignedTo} onValueChange={(v) => setFormData({ ...formData, assignedTo: v })}>
                   <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Unassigned</SelectItem>
                     {members.map(m => (
-                      <SelectItem key={m.id} value={m.id}>{m.full_name}</SelectItem>
+                      <SelectItem key={m.id} value={m.id}>{m.fullName}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

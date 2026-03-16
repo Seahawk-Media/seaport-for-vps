@@ -5,11 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from '@/integrations/supabase/client';
-import { Database } from '@/integrations/supabase/types';
+import { trpc } from '@/lib/trpc';
 import { Copy, Check } from 'lucide-react';
 
-type AppRole = Database['public']['Enums']['app_role'];
+type AppRole = 'admin' | 'manager' | 'employee';
 
 interface InviteUserProps {
   open: boolean;
@@ -23,10 +22,30 @@ export const InviteUser = ({ open, onOpenChange, onInviteSent, organizationId }:
     email: '',
     role: 'employee' as AppRole,
   });
-  const [loading, setLoading] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
+
+  const inviteMutation = trpc.invitations.create.useMutation({
+    onSuccess: (data) => {
+      if (data.inviteUrl) {
+        setInviteLink(data.inviteUrl);
+      }
+      toast({ title: `Invitation created for ${formData.email}` });
+      onInviteSent();
+      setFormData({ email: '', role: 'employee' });
+      if (!data.inviteUrl) {
+        onOpenChange(false);
+      }
+    },
+    onError: (error) => {
+      toast({
+        title: "Error sending invitation",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   const handleCopy = async () => {
     if (!inviteLink) return;
@@ -46,64 +65,10 @@ export const InviteUser = ({ open, onOpenChange, onInviteSent, organizationId }:
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setInviteLink(null);
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        toast({ title: "You must be logged in to send invitations", variant: "destructive" });
-        setLoading(false);
-        return;
-      }
-
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('invite-user', {
-        body: {
-          email: formData.email,
-          role: formData.role,
-          organizationId,
-          invitedBy: user.id,
-        },
-      });
-
-      if (fnError) {
-        console.error('Edge function error:', fnError);
-        toast({
-          title: "Error sending invitation",
-          description: fnError.message || "An unexpected error occurred.",
-          variant: "destructive",
-        });
-      } else if (fnData?.warning) {
-        // User already exists — amber warning
-        toast({
-          title: "User already registered",
-          description: fnData.warning,
-        });
-        onInviteSent();
-        setFormData({ email: '', role: 'employee' });
-        onOpenChange(false);
-      } else if (fnData?.inviteLink) {
-        // Success with fallback link
-        setInviteLink(fnData.inviteLink);
-        toast({ title: `Invitation sent to ${formData.email}` });
-        onInviteSent();
-        setFormData({ email: '', role: 'employee' });
-      } else {
-        // Full success
-        toast({ title: `Invitation sent to ${formData.email}` });
-        onInviteSent();
-        setFormData({ email: '', role: 'employee' });
-        onOpenChange(false);
-      }
-    } catch (error: any) {
-      toast({
-        title: "Error sending invitation",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
+    inviteMutation.mutate({
+      email: formData.email,
+      role: formData.role,
+    });
   };
 
   return (
@@ -145,7 +110,7 @@ export const InviteUser = ({ open, onOpenChange, onInviteSent, organizationId }:
                   value={formData.email}
                   onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
                   required
-                  disabled={loading}
+                  disabled={inviteMutation.isPending}
                 />
               </div>
               <div className="space-y-2">
@@ -153,7 +118,7 @@ export const InviteUser = ({ open, onOpenChange, onInviteSent, organizationId }:
                 <Select
                   value={formData.role}
                   onValueChange={(value: AppRole) => setFormData(prev => ({ ...prev, role: value }))}
-                  disabled={loading}
+                  disabled={inviteMutation.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a role" />
@@ -168,8 +133,8 @@ export const InviteUser = ({ open, onOpenChange, onInviteSent, organizationId }:
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleClose(false)}>Cancel</Button>
-              <Button type="submit" disabled={loading}>
-                {loading ? "Sending..." : "Send Invitation"}
+              <Button type="submit" disabled={inviteMutation.isPending}>
+                {inviteMutation.isPending ? "Sending..." : "Send Invitation"}
               </Button>
             </DialogFooter>
           </form>

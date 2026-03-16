@@ -1,34 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { format } from 'date-fns';
 import { Star } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 
-interface PerformanceReview {
-  id: string;
-  review_period_start: string;
-  review_period_end: string;
-  overall_rating: number | null;
-  status: string;
-  reviewer_comments: string | null;
-  strengths: string | null;
-  areas_for_improvement: string | null;
-  goals: string | null;
-  created_at: string;
-  reviewer_name: string | null;
-}
-
 export default function MePerformancePage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [reviews, setReviews] = useState<PerformanceReview[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -36,79 +20,40 @@ export default function MePerformancePage() {
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    const fetchMyReviews = async () => {
-      if (!user) return;
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-      try {
-        // Get current user's profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
+  const { data: reviewsData, isLoading: reviewsLoading } = trpc.reviews.list.useQuery(undefined, {
+    enabled: !!myProfile,
+  });
 
-        if (!profile) return;
+  const { data: profilesList } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!myProfile,
+  });
 
-        // Fetch reviews where I am the employee - use separate query for reviewer name
-        const { data, error } = await supabase
-          .from('performance_reviews')
-          .select(`
-            id,
-            review_period_start,
-            review_period_end,
-            overall_rating,
-            status,
-            reviewer_comments,
-            strengths,
-            areas_for_improvement,
-            goals,
-            created_at,
-            reviewer_id
-          `)
-          .eq('employee_id', profile.id)
-          .order('created_at', { ascending: false });
+  // Filter reviews where the current user is the employee
+  const reviews = (reviewsData ?? [])
+    .filter((r: any) => r.employeeId === myProfile?.id)
+    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map((review: any) => {
+      const reviewer = (profilesList ?? []).find((p: any) => p.id === review.reviewerId);
+      return {
+        id: review.id,
+        reviewPeriodStart: review.reviewPeriodStart,
+        reviewPeriodEnd: review.reviewPeriodEnd,
+        overallRating: review.overallRating,
+        status: review.status,
+        reviewerComments: review.reviewerComments,
+        strengths: review.strengths,
+        areasForImprovement: review.areasForImprovement,
+        goals: review.goals,
+        createdAt: review.createdAt,
+        reviewerName: reviewer?.fullName ?? null,
+      };
+    });
 
-        if (error) throw error;
-
-        // Fetch reviewer names separately
-        const reviewsWithNames = await Promise.all(
-          (data || []).map(async (review) => {
-            let reviewerName = null;
-            if (review.reviewer_id) {
-              const { data: reviewerProfile } = await supabase
-                .from('profiles')
-                .select('full_name')
-                .eq('id', review.reviewer_id)
-                .single();
-              reviewerName = reviewerProfile?.full_name || null;
-            }
-            return {
-              id: review.id,
-              review_period_start: review.review_period_start,
-              review_period_end: review.review_period_end,
-              overall_rating: review.overall_rating,
-              status: review.status,
-              reviewer_comments: review.reviewer_comments,
-              strengths: review.strengths,
-              areas_for_improvement: review.areas_for_improvement,
-              goals: review.goals,
-              created_at: review.created_at,
-              reviewer_name: reviewerName,
-            };
-          })
-        );
-
-        setReviews(reviewsWithNames);
-      } catch (error) {
-        console.error('Error fetching reviews:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMyReviews();
-  }, [user]);
+  const loading = reviewsLoading;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -155,17 +100,17 @@ export default function MePerformancePage() {
                 <div className="flex items-start justify-between">
                   <div>
                     <CardTitle className="text-lg">
-                      {review.review_period_start && review.review_period_end
-                        ? `${format(new Date(review.review_period_start), 'MMM yyyy')} - ${format(new Date(review.review_period_end), 'MMM yyyy')}`
+                      {review.reviewPeriodStart && review.reviewPeriodEnd
+                        ? `${format(new Date(review.reviewPeriodStart), 'MMM yyyy')} - ${format(new Date(review.reviewPeriodEnd), 'MMM yyyy')}`
                         : 'Performance Review'}
                     </CardTitle>
                     <CardDescription>
-                      Reviewed by {review.reviewer_name || 'Unknown'} on{' '}
-                      {format(new Date(review.created_at), 'MMM d, yyyy')}
+                      Reviewed by {review.reviewerName || 'Unknown'} on{' '}
+                      {format(new Date(review.createdAt), 'MMM d, yyyy')}
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {renderStars(review.overall_rating)}
+                    {renderStars(review.overallRating)}
                     <Badge variant={getStatusColor(review.status)}>
                       {review.status}
                     </Badge>
@@ -179,10 +124,10 @@ export default function MePerformancePage() {
                     <p className="text-sm text-muted-foreground">{review.strengths}</p>
                   </div>
                 )}
-                {review.areas_for_improvement && (
+                {review.areasForImprovement && (
                   <div>
                     <h4 className="font-medium text-sm mb-1">Areas for Improvement</h4>
-                    <p className="text-sm text-muted-foreground">{review.areas_for_improvement}</p>
+                    <p className="text-sm text-muted-foreground">{review.areasForImprovement}</p>
                   </div>
                 )}
                 {review.goals && (
@@ -191,10 +136,10 @@ export default function MePerformancePage() {
                     <p className="text-sm text-muted-foreground">{review.goals}</p>
                   </div>
                 )}
-                {review.reviewer_comments && (
+                {review.reviewerComments && (
                   <div>
                     <h4 className="font-medium text-sm mb-1">Comments</h4>
-                    <p className="text-sm text-muted-foreground">{review.reviewer_comments}</p>
+                    <p className="text-sm text-muted-foreground">{review.reviewerComments}</p>
                   </div>
                 )}
               </CardContent>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
@@ -11,23 +11,23 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { format } from 'date-fns';
 import { TrendingUp, Calendar, Edit } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 interface DirectReport {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
-  job_title: string | null;
-  avatar_url: string | null;
+  jobTitle: string | null;
+  avatarUrl: string | null;
   promotion: {
     id: string;
-    role_title: string | null;
-    salary_band: string | null;
-    next_review_date: string | null;
-    last_review_date: string | null;
+    roleTitle: string | null;
+    salaryBand: string | null;
+    nextReviewDate: string | null;
+    lastReviewDate: string | null;
   } | null;
 }
 
@@ -37,14 +37,12 @@ export default function ManagePromotionsPage() {
   const { organization } = useOrganization();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [reports, setReports] = useState<DirectReport[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState<DirectReport | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({
-    role_title: '',
-    salary_band: '',
-    next_review_date: '',
+    roleTitle: '',
+    salaryBand: '',
+    nextReviewDate: '',
   });
 
   useEffect(() => {
@@ -55,68 +53,63 @@ export default function ManagePromotionsPage() {
     if (!roleLoading && !isManager() && !isAdmin()) navigate('/dashboard');
   }, [roleLoading, isManager, isAdmin, navigate]);
 
-  const fetchReports = async () => {
-    if (!user || roleLoading) return;
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-    try {
-      const { data: currentProfile } = await supabase
-        .from('profiles')
-        .select('id, organization_id')
-        .eq('user_id', user.id)
-        .single();
+  const { data: allProfiles, isLoading: profilesLoading } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!myProfile && !roleLoading,
+  });
 
-      if (!currentProfile) return;
+  const { data: allPromotions, isLoading: promotionsLoading, refetch: refetchPromotions } = trpc.promotions.list.useQuery(undefined, {
+    enabled: !!myProfile && !roleLoading,
+  });
 
-      let query = supabase
-        .from('profiles')
-        .select('id, full_name, email, job_title, avatar_url');
+  const upsertMutation = trpc.promotions.upsert.useMutation({
+    onSuccess: () => {
+      refetchPromotions();
+    },
+  });
 
-      if (isAdmin()) {
-        query = query.eq('organization_id', currentProfile.organization_id);
-      } else {
-        query = query.eq('manager_id', currentProfile.id);
-      }
+  const loading = profilesLoading || promotionsLoading;
 
-      const { data: profiles, error } = await query.order('full_name');
-      if (error) throw error;
+  const reports: DirectReport[] = useMemo(() => {
+    if (!allProfiles || !myProfile) return [];
+    const promotionMap = new Map((allPromotions ?? []).map((p: any) => [p.profileId, p]));
 
-      const profileIds = profiles?.map(p => p.id) || [];
-      if (profileIds.length === 0) {
-        setReports([]);
-        setLoading(false);
-        return;
-      }
+    const filtered = isAdmin()
+      ? allProfiles
+      : allProfiles.filter((p: any) => p.managerId === myProfile.id);
 
-      const { data: promotions } = await (supabase
-        .from('promotions' as any)
-        .select('id, profile_id, role_title, salary_band, next_review_date, last_review_date')
-        .in('profile_id', profileIds) as any);
-
-      const promotionMap = new Map((promotions || []).map((p: any) => [p.profile_id, p]));
-
-      const reportsWithPromotions: DirectReport[] = (profiles || []).map(p => ({
-        ...p,
-        promotion: promotionMap.get(p.id) as DirectReport['promotion'] || null,
-      }));
-
-      setReports(reportsWithPromotions);
-    } catch (error) {
-      console.error('Error fetching reports:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchReports();
-  }, [user, roleLoading, isAdmin]);
+    return filtered
+      .map((p: any) => {
+        const promo = promotionMap.get(p.id);
+        return {
+          id: p.id,
+          fullName: p.fullName,
+          email: p.email,
+          jobTitle: p.jobTitle ?? null,
+          avatarUrl: p.avatarUrl ?? null,
+          promotion: promo
+            ? {
+                id: promo.id,
+                roleTitle: promo.roleTitle ?? null,
+                salaryBand: promo.salaryBand ?? null,
+                nextReviewDate: promo.nextReviewDate ?? null,
+                lastReviewDate: promo.lastReviewDate ?? null,
+              }
+            : null,
+        };
+      })
+      .sort((a: DirectReport, b: DirectReport) => (a.fullName ?? '').localeCompare(b.fullName ?? ''));
+  }, [allProfiles, allPromotions, myProfile, isAdmin]);
 
   const handleEditClick = (report: DirectReport) => {
     setSelectedReport(report);
     setFormData({
-      role_title: report.promotion?.role_title || report.job_title || '',
-      salary_band: report.promotion?.salary_band || '',
-      next_review_date: report.promotion?.next_review_date || '',
+      roleTitle: report.promotion?.roleTitle || report.jobTitle || '',
+      salaryBand: report.promotion?.salaryBand || '',
+      nextReviewDate: report.promotion?.nextReviewDate || '',
     });
     setIsDialogOpen(true);
   };
@@ -125,42 +118,16 @@ export default function ManagePromotionsPage() {
     if (!selectedReport || !organization) return;
 
     try {
-      const { data: currentProfile } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('user_id', user!.id)
-        .single();
-
-      if (selectedReport.promotion) {
-        const { error } = await (supabase
-          .from('promotions' as any)
-          .update({
-            role_title: formData.role_title || null,
-            salary_band: formData.salary_band || null,
-            next_review_date: formData.next_review_date || null,
-          })
-          .eq('id', selectedReport.promotion.id) as any);
-
-        if (error) throw error;
-      } else {
-        const { error } = await (supabase
-          .from('promotions' as any)
-          .insert({
-            profile_id: selectedReport.id,
-            organization_id: currentProfile?.organization_id,
-            role_title: formData.role_title || null,
-            salary_band: formData.salary_band || null,
-            next_review_date: formData.next_review_date || null,
-          }) as any);
-
-        if (error) throw error;
-      }
+      await upsertMutation.mutateAsync({
+        profileId: selectedReport.id,
+        roleTitle: formData.roleTitle || null,
+        salaryBand: formData.salaryBand || null,
+        nextReviewDate: formData.nextReviewDate || null,
+      });
 
       toast({ title: 'Promotion saved', description: 'The promotion information has been updated.' });
       setIsDialogOpen(false);
-      fetchReports();
-    } catch (error) {
-      console.error('Error saving promotion:', error);
+    } catch {
       toast({ title: 'Error', description: 'Failed to save promotion.', variant: 'destructive' });
     }
   };
@@ -193,14 +160,14 @@ export default function ManagePromotionsPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Avatar className="h-10 w-10">
-                        <AvatarImage src={report.avatar_url || undefined} />
-                        <AvatarFallback>{getInitials(report.full_name)}</AvatarFallback>
+                        <AvatarImage src={report.avatarUrl || undefined} />
+                        <AvatarFallback>{getInitials(report.fullName)}</AvatarFallback>
                       </Avatar>
                       <div>
-                        <CardTitle className="text-base">{report.full_name}</CardTitle>
+                        <CardTitle className="text-base">{report.fullName}</CardTitle>
                         <CardDescription>
-                          {report.promotion?.role_title || report.job_title || 'No role set'}
-                          {report.promotion?.salary_band && ` • Band: ${report.promotion.salary_band}`}
+                          {report.promotion?.roleTitle || report.jobTitle || 'No role set'}
+                          {report.promotion?.salaryBand && ` • Band: ${report.promotion.salaryBand}`}
                         </CardDescription>
                       </div>
                     </div>
@@ -214,8 +181,8 @@ export default function ManagePromotionsPage() {
                   <div className="flex items-center gap-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <Calendar className="h-4 w-4" />
-                      Next review: {report.promotion?.next_review_date
-                        ? format(new Date(report.promotion.next_review_date), 'MMM d, yyyy')
+                      Next review: {report.promotion?.nextReviewDate
+                        ? format(new Date(report.promotion.nextReviewDate), 'MMM d, yyyy')
                         : 'Not scheduled'}
                     </div>
                   </div>
@@ -228,15 +195,15 @@ export default function ManagePromotionsPage() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Edit Promotion — {selectedReport?.full_name}</DialogTitle>
+              <DialogTitle>Edit Promotion — {selectedReport?.fullName}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="role">Role Title</Label>
                 <Input
                   id="role"
-                  value={formData.role_title}
-                  onChange={(e) => setFormData(prev => ({ ...prev, role_title: e.target.value }))}
+                  value={formData.roleTitle}
+                  onChange={(e) => setFormData(prev => ({ ...prev, roleTitle: e.target.value }))}
                   placeholder="e.g., Senior Developer"
                 />
               </div>
@@ -244,8 +211,8 @@ export default function ManagePromotionsPage() {
                 <Label htmlFor="band">Salary Band</Label>
                 <Input
                   id="band"
-                  value={formData.salary_band}
-                  onChange={(e) => setFormData(prev => ({ ...prev, salary_band: e.target.value }))}
+                  value={formData.salaryBand}
+                  onChange={(e) => setFormData(prev => ({ ...prev, salaryBand: e.target.value }))}
                   placeholder="e.g., Band 4"
                 />
               </div>
@@ -254,8 +221,8 @@ export default function ManagePromotionsPage() {
                 <Input
                   id="next"
                   type="date"
-                  value={formData.next_review_date}
-                  onChange={(e) => setFormData(prev => ({ ...prev, next_review_date: e.target.value }))}
+                  value={formData.nextReviewDate}
+                  onChange={(e) => setFormData(prev => ({ ...prev, nextReviewDate: e.target.value }))}
                 />
               </div>
             </div>

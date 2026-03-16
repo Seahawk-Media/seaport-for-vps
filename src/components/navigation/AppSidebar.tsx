@@ -17,19 +17,14 @@ import {
 import { useOrganization } from "@/hooks/useOrganization";
 import { useRole } from "@/hooks/useRole";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 
-// Module-level variable to persist scroll position across navigations
 let savedScrollPosition = 0;
-
-
-
 
 interface AppSidebarProps {
   viewMode?: string;
 }
 
-// ME section - Personal views for all users
 const meItems = [
   { value: "my-journey", label: "My Journey", icon: User, route: null },
   { value: "me-performance", label: "Performance", icon: Eye, route: "/me/performance" },
@@ -37,7 +32,6 @@ const meItems = [
   { value: "me-promotions", label: "Promotions", icon: TrendingUp, route: "/me/promotions" },
 ];
 
-// TEAM section - Team views for managers/admins
 const manageItems = [
   { value: "team-reports", label: "Team Journeys", icon: Users, route: "/team/trails" },
   { value: "team-performance", label: "Perf Reviews", icon: Eye, route: "/team/performance" },
@@ -45,7 +39,6 @@ const manageItems = [
   { value: "team-promotions", label: "Promotions", icon: TrendingUp, route: "/team/promotions" },
 ];
 
-// ORG section - split into People and Departments sub-groups
 const orgPeopleItems = [
   { value: "hierarchy", label: "Org Chart", icon: GitBranch, route: "/hierarchy" },
   { value: "holiday-calendar", label: "Event Calendar", icon: CalendarDays, route: "/holiday-calendar" },
@@ -62,7 +55,6 @@ const orgResourceItems = [
   { value: "measurables", label: "Measurables", icon: Target, route: "/measurables" },
 ];
 
-// ADMIN section - Admin only items (sticky footer)
 const adminItems = [
   { value: "analytics", label: "Analytics", icon: BarChart3, route: "/analytics" },
   { value: "admin", label: "Admin", icon: Settings, route: "/org" },
@@ -78,14 +70,17 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
   const location = useLocation();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Restore scroll position after navigation
+  const meQuery = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+    retry: false,
+  });
+
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = savedScrollPosition;
     }
   }, [location.pathname]);
 
-  // Save scroll position on scroll
   const handleScroll = () => {
     if (scrollContainerRef.current) {
       savedScrollPosition = scrollContainerRef.current.scrollTop;
@@ -99,26 +94,18 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
     if (route) return location.pathname === route;
     return false;
   };
-  
-  // Wait for roles to load before determining visibility
+
   const canSeeAdmin = !roleLoading && (isAdmin() || isSuperAdmin());
   const canSeeManage = !roleLoading && (isManager() || isAdmin() || isSuperAdmin());
 
   const handleNavClick = async (item: { value: string; route: string | null }) => {
     if (item.value === 'my-journey') {
-      if (!user) return;
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (profile) {
-        navigate(`/journey/${profile.id}`);
+      if (meQuery.data) {
+        navigate(`/journey/${meQuery.data.id}`);
       }
       return;
     }
-    
+
     if (item.route) {
       navigate(item.route);
     }
@@ -126,11 +113,9 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
 
   const renderNavSection = (
     items: typeof meItems,
-    showAdminOnly = false
   ) => (
     <SidebarMenu className="space-y-0.5">
       {items.map((item) => {
-        if ('adminOnly' in item && item.adminOnly && !canSeeAdmin) return null;
         const active = isActive(item.value, item.route);
         return (
           <SidebarMenuItem key={item.value}>
@@ -138,8 +123,8 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
               onClick={() => handleNavClick(item)}
               className={`
                 rounded-lg transition-colors duration-150
-                ${active 
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" 
+                ${active
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                 }
               `}
@@ -175,9 +160,8 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           )}
         </div>
       </SidebarHeader>
-      
+
       <SidebarContent ref={scrollContainerRef} onScroll={handleScroll} className="px-2 py-3 gap-1">
-        {/* Dashboard + Tasks + SSO - top level */}
         <SidebarGroup className="space-y-0.5">
           <SidebarGroupContent>
             <SidebarMenu>
@@ -241,7 +225,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ME Section */}
         <SidebarGroup className="space-y-0.5">
           <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
             Me
@@ -251,7 +234,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* MANAGE Section - Only visible to managers/admins */}
         {canSeeManage && (
           <SidebarGroup className="space-y-0.5 mt-3">
             <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
@@ -263,7 +245,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroup>
         )}
 
-        {/* ORG Section */}
         <SidebarGroup className="space-y-0.5 mt-3">
           <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
             Org
@@ -273,7 +254,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ORG Resources Sub-section */}
         <SidebarGroup className="space-y-0.5 mt-3">
           <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
             Departments
@@ -284,7 +264,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
         </SidebarGroup>
       </SidebarContent>
 
-      {/* Admin Footer - Sticky at bottom, only for admins */}
       {canSeeAdmin && (
         <SidebarFooter className="border-t border-sidebar-border px-2 py-2">
           <SidebarMenu className="space-y-0.5">
@@ -296,8 +275,8 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
                     onClick={() => handleNavClick(item)}
                     className={`
                       rounded-lg transition-colors duration-150
-                      ${active 
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" 
+                      ${active
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                         : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                       }
                     `}

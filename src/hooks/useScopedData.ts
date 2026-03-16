@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
 import { useOrganization } from '@/hooks/useOrganization';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { DataScope } from '@/types/scope';
 
 interface ScopedDataResult {
@@ -23,60 +23,43 @@ export function useScopedData(scope: DataScope): ScopedDataResult {
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Admins viewing 'team' scope see org-wide
   const effectiveScope = (scope === 'team' && isAdmin()) ? 'org' : scope;
   const canApprove = scope !== 'personal' && (isManager() || isAdmin());
 
+  const meQuery = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
+
+  const profilesQuery = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!user && effectiveScope === 'org',
+  });
+
   useEffect(() => {
-    const fetchScopedProfiles = async () => {
-      if (!user) {
-        setLoading(false);
-        return;
-      }
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-      try {
-        // Get current user's profile
-        const { data: currentProfile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
+    if (meQuery.isLoading) return;
 
-        if (!currentProfile) {
-          setLoading(false);
-          return;
+    if (meQuery.data) {
+      setCurrentProfileId(meQuery.data.id);
+
+      if (scope === 'personal') {
+        setProfileIds([meQuery.data.id]);
+      } else if (effectiveScope === 'org' && profilesQuery.data) {
+        setProfileIds(profilesQuery.data.map((p: any) => p.id));
+      } else {
+        // Manager scope — direct reports (filtered by managerId)
+        if (profilesQuery.data) {
+          const reports = profilesQuery.data.filter((p: any) => p.managerId === meQuery.data?.id);
+          setProfileIds(reports.map((p: any) => p.id));
         }
-
-        setCurrentProfileId(currentProfile.id);
-
-        if (scope === 'personal') {
-          setProfileIds([currentProfile.id]);
-        } else if (effectiveScope === 'org') {
-          // Admin: get all profiles in organization
-          const { data: orgProfiles } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('organization_id', organization?.id);
-          
-          setProfileIds(orgProfiles?.map(p => p.id) || []);
-        } else {
-          // Manager: get direct reports
-          const { data: directReports } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('manager_id', currentProfile.id);
-          
-          setProfileIds(directReports?.map(p => p.id) || []);
-        }
-      } catch (error) {
-        console.error('Error fetching scoped profiles:', error);
-      } finally {
-        setLoading(false);
       }
-    };
+    }
 
-    fetchScopedProfiles();
-  }, [user, scope, effectiveScope, organization?.id]);
+    setLoading(false);
+  }, [user, scope, effectiveScope, meQuery.data, meQuery.isLoading, profilesQuery.data]);
 
   return {
     currentProfileId,

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useAuth } from "@/hooks/useAuth";
 import { useOrganization } from "@/hooks/useOrganization";
 import {
@@ -20,7 +20,7 @@ import { Save, Send } from "lucide-react";
 
 interface Employee {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
   role: string;
 }
@@ -28,7 +28,7 @@ interface Employee {
 interface ReviewTemplate {
   id: string;
   name: string;
-  criteria: any; // Will be parsed from JSON
+  criteria: unknown;
 }
 
 interface PerformanceReviewModalProps {
@@ -45,48 +45,43 @@ export function PerformanceReviewModal({
   const { user } = useAuth();
   const { organization } = useOrganization();
   const { toast } = useToast();
-  
+
   const [reviewPeriod, setReviewPeriod] = useState("");
   const [goals, setGoals] = useState("");
   const [feedback, setFeedback] = useState("");
   const [criteriaScores, setCriteriaScores] = useState<Record<string, { score: number; comments: string }>>({});
   const [reviewTemplate, setReviewTemplate] = useState<ReviewTemplate | null>(null);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const { data: templates } = trpc.reviews.listTemplates.useQuery(undefined, {
+    enabled: isOpen,
+  });
+
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: isOpen && !!user,
+  });
+
+  const createReview = trpc.reviews.create.useMutation();
+
   useEffect(() => {
-    if (isOpen) {
-      fetchDefaultTemplate();
-      setDefaultReviewPeriod();
-    }
-  }, [isOpen]);
-
-  const fetchDefaultTemplate = async () => {
-    try {
-      const { data: template } = await supabase
-        .from("review_templates")
-        .select("*")
-        .eq("is_default", true)
-        .single();
-
-      if (template) {
-        setReviewTemplate(template);
-        // Initialize criteria scores
+    if (isOpen && templates) {
+      const defaultTemplate = templates.find((t: Record<string, unknown>) => t.isDefault);
+      if (defaultTemplate) {
+        setReviewTemplate(defaultTemplate);
         const initialScores: Record<string, { score: number; comments: string }> = {};
-        const criteriaArray = Array.isArray(template.criteria) 
-          ? template.criteria 
-          : typeof template.criteria === 'string' 
-            ? JSON.parse(template.criteria)
+        const criteriaArray = Array.isArray(defaultTemplate.criteria)
+          ? defaultTemplate.criteria
+          : typeof defaultTemplate.criteria === 'string'
+            ? JSON.parse(defaultTemplate.criteria)
             : [];
-        criteriaArray.forEach((criterion: any) => {
+        criteriaArray.forEach((criterion: { name: string }) => {
           initialScores[criterion.name] = { score: 3, comments: "" };
         });
         setCriteriaScores(initialScores);
       }
-    } catch (error) {
-      console.error("Error fetching review template:", error);
+      setDefaultReviewPeriod();
     }
-  };
+  }, [isOpen, templates]);
 
   const setDefaultReviewPeriod = () => {
     const now = new Date();
@@ -102,39 +97,24 @@ export function PerformanceReviewModal({
   };
 
   const handleSave = async (status: "draft" | "completed") => {
-    if (!user || !organization) return;
+    if (!user || !organization || !myProfile) return;
 
     setSaving(true);
     try {
-      // Get reviewer profile
-      const { data: reviewerProfile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (!reviewerProfile) {
-        throw new Error("Reviewer profile not found");
-      }
-
       const overallRating = calculateOverallRating();
 
-      const { error } = await supabase
-        .from("performance_reviews")
-        .insert({
-          employee_id: employee.id,
-          reviewer_id: reviewerProfile.id,
-          review_period: reviewPeriod,
-          rating: overallRating,
-          feedback,
-          goals,
-          status,
-          organization_id: organization.id,
-          criteria_scores: criteriaScores,
-          review_template_id: reviewTemplate?.id,
-        });
-
-      if (error) throw error;
+      await createReview.mutateAsync({
+        employeeId: employee.id,
+        reviewerId: myProfile.id,
+        reviewPeriod,
+        rating: overallRating,
+        feedback,
+        goals,
+        status,
+        organizationId: organization.id,
+        criteriaScores,
+        reviewTemplateId: reviewTemplate?.id,
+      });
 
       toast({
         title: "Success",
@@ -142,8 +122,7 @@ export function PerformanceReviewModal({
       });
 
       onClose();
-    } catch (error) {
-      console.error("Error saving review:", error);
+    } catch {
       toast({
         title: "Error",
         description: "Failed to save performance review",
@@ -160,14 +139,14 @@ export function PerformanceReviewModal({
         <DialogHeader>
           <DialogTitle>Performance Review</DialogTitle>
           <DialogDescription>
-            Complete performance review for {employee.full_name}
+            Complete performance review for {employee.fullName}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
           <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
             <div>
-              <h3 className="font-semibold">{employee.full_name}</h3>
+              <h3 className="font-semibold">{employee.fullName}</h3>
               <p className="text-sm text-muted-foreground">{employee.role}</p>
             </div>
             <Badge variant="outline">
@@ -188,9 +167,9 @@ export function PerformanceReviewModal({
 
             {reviewTemplate && (
               <ReviewCriteriaForm
-                criteria={Array.isArray(reviewTemplate.criteria) 
-                  ? reviewTemplate.criteria 
-                  : typeof reviewTemplate.criteria === 'string' 
+                criteria={Array.isArray(reviewTemplate.criteria)
+                  ? reviewTemplate.criteria
+                  : typeof reviewTemplate.criteria === 'string'
                     ? JSON.parse(reviewTemplate.criteria)
                     : []}
                 scores={criteriaScores}

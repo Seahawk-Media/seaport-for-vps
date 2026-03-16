@@ -2,68 +2,44 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { AgentChat } from "@/components/agents/AgentChat";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useAuth } from "@/hooks/useAuth";
 
 const AgentChatPage = () => {
   const { agentId } = useParams<{ agentId: string }>();
   const { user } = useAuth();
-  const [agent, setAgent] = useState<{ name: string } | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
+  const { data: agent } = trpc.agents.get.useQuery(
+    { id: agentId! },
+    { enabled: !!agentId }
+  );
+
+  const { data: conversations } = trpc.agentChat.listConversations.useQuery(
+    { agentId: agentId! },
+    { enabled: !!agentId && !!user }
+  );
+
+  const createConversation = trpc.agentChat.createConversation.useMutation();
+
   useEffect(() => {
-    if (!agentId || !user) return;
+    if (!agentId || !user || !conversations) return;
 
-    const init = async () => {
-      // Load agent
-      const { data: agentData } = await supabase
-        .from("agents")
-        .select("name")
-        .eq("id", agentId)
-        .single();
-
-      if (agentData) setAgent(agentData);
-
-      // Find or create conversation
-      const { data: existing } = await supabase
-        .from("agent_conversations" as any)
-        .select("id")
-        .eq("agent_id", agentId)
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (existing) {
-        setConversationId((existing as any).id);
-      } else {
-        // Get user's org
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("organization_id")
-          .eq("user_id", user.id)
-          .single();
-
-        if (profile) {
-          const { data: newConv } = await supabase
-            .from("agent_conversations" as any)
-            .insert({
-              agent_id: agentId,
-              user_id: user.id,
-              organization_id: profile.organization_id,
-              title: `Chat with ${agentData?.name ?? "Agent"}`,
-            })
-            .select("id")
-            .single();
-
-          if (newConv) setConversationId((newConv as any).id);
+    const activeConversation = conversations.find((c: any) => c.status === 'active');
+    if (activeConversation) {
+      setConversationId(activeConversation.id);
+    } else {
+      // Create a new conversation
+      createConversation.mutate(
+        { agentId, title: `Chat with ${agent?.name ?? "Agent"}` },
+        {
+          onSuccess: (data) => {
+            setConversationId(data.id);
+          },
         }
-      }
-    };
-
-    init();
-  }, [agentId, user]);
+      );
+    }
+  }, [agentId, user, conversations]);
 
   if (!agentId) return null;
 

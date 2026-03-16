@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: seaport
+      POSTGRES_USER: seaport
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seaport"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  seaport:
+    build:
+      context: .
+      args:
+        VITE_APP_NAME: ${APP_NAME:-Seaport}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+    environment:
+      DATABASE_URL: postgresql://seaport:${DB_PASSWORD}@db:5432/seaport
+      SESSION_SECRET: ${SESSION_SECRET}
+      SITE_URL: ${SITE_URL}
+      PORT: 3000
+      APP_NAME: ${APP_NAME:-Seaport}
+
+volumes:
+  db-data:
+  uploads:

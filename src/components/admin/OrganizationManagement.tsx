@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useRole } from "@/hooks/useRole";
 import { BrandingManagement } from "./BrandingManagement";
@@ -29,6 +29,18 @@ export const OrganizationManagement: React.FC = () => {
     }
   }, [organization]);
 
+  const updateOrg = trpc.org.update.useMutation({
+    onSuccess: async () => {
+      await refetch();
+      toast({ title: "Success", description: "Organization updated successfully." });
+      setSaving(false);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update organization. Please try again.", variant: "destructive" });
+      setSaving(false);
+    },
+  });
+
   const generateSlug = (name: string) => {
     return name
       .toLowerCase()
@@ -45,7 +57,7 @@ export const OrganizationManagement: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!organization || !isSuperAdmin()) {
       toast({
         title: "Access Denied",
@@ -65,38 +77,11 @@ export const OrganizationManagement: React.FC = () => {
     }
 
     setSaving(true);
-
-    try {
-      const { error } = await supabase
-        .from('organizations')
-        .update({
-          name: formData.name.trim(),
-          slug: formData.slug,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', organization.id);
-
-      if (error) throw error;
-
-      await refetch();
-
-      toast({
-        title: "Success",
-        description: "Organization updated successfully.",
-      });
-    } catch (error) {
-      console.error('Error updating organization:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update organization. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setSaving(false);
-    }
+    updateOrg.mutate({
+      name: formData.name.trim(),
+    });
   };
 
-  // Show loading while roles are being fetched
   if (roleLoading) {
     return (
       <Card>

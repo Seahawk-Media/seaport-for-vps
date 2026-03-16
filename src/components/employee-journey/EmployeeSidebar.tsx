@@ -6,21 +6,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MapPin, Crown } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useToast } from '@/hooks/use-toast';
 import { useRole } from '@/hooks/useRole';
 import { useOrganization } from '@/hooks/useOrganization';
 
 interface Profile {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
-  job_title?: string;
-  department_id?: string;
-  location?: string;
-  status?: string;
-  avatar_url?: string;
-  manager_id?: string;
+  jobTitle?: string | null;
+  departmentId?: string | null;
+  location?: string | null;
+  status?: string | null;
+  avatarUrl?: string | null;
+  managerId?: string | null;
 }
 
 interface EmployeeSidebarProps {
@@ -31,106 +31,58 @@ interface EmployeeSidebarProps {
 export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarProps) => {
   const { organization } = useOrganization();
   const [editData, setEditData] = useState({
-    full_name: employee.full_name || '',
-    job_title: employee.job_title || '',
+    fullName: employee.fullName || '',
+    jobTitle: employee.jobTitle || '',
     location: employee.location || '',
-    manager_id: employee.manager_id || ''
-  });
-  const [profiles, setProfiles] = useState<{id: string; full_name: string}[]>([]);
-  const [leadershipRoles, setLeadershipRoles] = useState<{
-    isDepartmentHead: boolean;
-    isFunctionLead: boolean;
-    departmentName?: string;
-    functionNames?: string[];
-  }>({
-    isDepartmentHead: false,
-    isFunctionLead: false
+    managerId: employee.managerId || ''
   });
   const { toast } = useToast();
   const { isAdmin, isSuperAdmin } = useRole();
-  
+
   const canEdit = isAdmin() || isSuperAdmin();
 
-  useEffect(() => {
-    if (canEdit) {
-      fetchProfiles();
-    }
-    fetchLeadershipRoles();
-    setEditData({
-      full_name: employee.full_name || '',
-      job_title: employee.job_title || '',
-      location: employee.location || '',
-      manager_id: employee.manager_id || ''
-    });
-  }, [canEdit, employee]);
+  const { data: profiles = [] } = trpc.profiles.list.useQuery(undefined, { enabled: canEdit });
+  const { data: departments = [] } = trpc.departments.list.useQuery();
+  const { data: teams = [] } = trpc.teams.list.useQuery();
 
-  const fetchProfiles = async () => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .order('full_name');
-      setProfiles(data || []);
-    } catch (error) {
-      console.error('Error fetching profiles:', error);
-    }
+  // Compute leadership roles from departments and teams data
+  const leadershipRoles = {
+    isDepartmentHead: departments.some((d: any) => d.headId === employee.id),
+    isFunctionLead: teams.some((t: any) => t.teamLeadId === employee.id),
+    departmentName: departments.find((d: any) => d.headId === employee.id)?.name,
+    functionNames: teams.filter((t: any) => t.teamLeadId === employee.id).map((t: any) => t.name),
   };
 
-  const fetchLeadershipRoles = async () => {
-    try {
-      const { data: departments } = await supabase
-        .from('departments')
-        .select('name')
-        .eq('head_id', employee.id);
-
-      const { data: teams } = await supabase
-        .from('teams')
-        .select('name')
-        .eq('team_lead_id', employee.id);
-
-      setLeadershipRoles({
-        isDepartmentHead: (departments && departments.length > 0),
-        isFunctionLead: (teams && teams.length > 0),
-        departmentName: departments?.[0]?.name,
-        functionNames: teams?.map(t => t.name) || []
-      });
-    } catch (error) {
-      console.error('Error fetching leadership roles:', error);
-    }
-  };
-
-  const handleFieldUpdate = async (field: string, value: string) => {
-    if (!canEdit) return;
-    
-    try {
-      const updateData: any = {};
-      if (field === 'manager_id') {
-        updateData[field] = value === 'none' ? null : value || null;
-      } else {
-        updateData[field] = value || null;
-      }
-
-      const { error } = await supabase
-        .from('profiles')
-        .update(updateData)
-        .eq('id', employee.id);
-
-      if (error) throw error;
-
-      toast({
-        title: "Success",
-        description: "Profile updated successfully"
-      });
-      
+  const updateProfileMutation = trpc.profiles.update.useMutation({
+    onSuccess: () => {
+      toast({ title: "Success", description: "Profile updated successfully" });
       onEmployeeUpdate?.();
-    } catch (error) {
-      console.error('Error updating profile:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update profile",
-        variant: "destructive"
-      });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update profile", variant: "destructive" });
+    },
+  });
+
+  useEffect(() => {
+    setEditData({
+      fullName: employee.fullName || '',
+      jobTitle: employee.jobTitle || '',
+      location: employee.location || '',
+      managerId: employee.managerId || ''
+    });
+  }, [employee]);
+
+  const handleFieldUpdate = (field: string, value: string) => {
+    if (!canEdit) return;
+
+    const updateData: any = {};
+    if (field === 'managerId') {
+      updateData[field] = value === 'none' ? undefined : value || undefined;
+    } else {
+      updateData[field] = value || undefined;
     }
+
+    updateProfileMutation.mutate(updateData);
   };
 
   const getInitials = (name: string) => {
@@ -149,20 +101,20 @@ export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarP
         <CardHeader className="pb-3">
           <div className="flex items-center gap-3">
             <Avatar className="w-12 h-12">
-              <AvatarImage src={employee.avatar_url} />
-              <AvatarFallback className="text-sm">{getInitials(employee.full_name)}</AvatarFallback>
+              <AvatarImage src={employee.avatarUrl || undefined} />
+              <AvatarFallback className="text-sm">{getInitials(employee.fullName)}</AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               {canEdit ? (
                 <Input
-                  value={editData.full_name}
-                  onChange={(e) => setEditData(prev => ({ ...prev, full_name: e.target.value }))}
-                  onBlur={(e) => handleFieldUpdate('full_name', e.target.value)}
+                  value={editData.fullName}
+                  onChange={(e) => setEditData(prev => ({ ...prev, fullName: e.target.value }))}
+                  onBlur={(e) => handleFieldUpdate('fullName', e.target.value)}
                   className="text-lg font-semibold border-none px-0 h-auto focus-visible:ring-0"
                   placeholder="Employee Name"
                 />
               ) : (
-                <h3 className="text-lg font-semibold truncate">{employee.full_name}</h3>
+                <h3 className="text-lg font-semibold truncate">{employee.fullName}</h3>
               )}
               <p className="text-sm text-muted-foreground truncate">{employee.email}</p>
               {(leadershipRoles.isDepartmentHead || leadershipRoles.isFunctionLead) && (
@@ -188,7 +140,7 @@ export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarP
                     Department Head: {leadershipRoles.departmentName}
                   </p>
                 )}
-                {leadershipRoles.isFunctionLead && leadershipRoles.functionNames && (
+                {leadershipRoles.isFunctionLead && leadershipRoles.functionNames.length > 0 && (
                   <p className="text-xs text-yellow-700 dark:text-yellow-300">
                     Function Lead: {leadershipRoles.functionNames.join(', ')}
                   </p>
@@ -200,25 +152,25 @@ export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarP
             <label className="text-sm font-medium text-muted-foreground">Job Title</label>
             {canEdit ? (
               <Input
-                value={editData.job_title}
-                onChange={(e) => setEditData(prev => ({ ...prev, job_title: e.target.value }))}
-                onBlur={(e) => handleFieldUpdate('job_title', e.target.value)}
+                value={editData.jobTitle}
+                onChange={(e) => setEditData(prev => ({ ...prev, jobTitle: e.target.value }))}
+                onBlur={(e) => handleFieldUpdate('jobTitle', e.target.value)}
                 className="mt-1 h-8"
                 placeholder="Enter job title"
               />
             ) : (
-              <p className="text-sm mt-1">{employee.job_title || 'Not specified'}</p>
+              <p className="text-sm mt-1">{employee.jobTitle || 'Not specified'}</p>
             )}
           </div>
-          
+
           <div>
             <label className="text-sm font-medium text-muted-foreground">Manager</label>
             {canEdit ? (
               <Select
-                value={editData.manager_id}
+                value={editData.managerId}
                 onValueChange={(value) => {
-                  setEditData(prev => ({ ...prev, manager_id: value }));
-                  handleFieldUpdate('manager_id', value);
+                  setEditData(prev => ({ ...prev, managerId: value }));
+                  handleFieldUpdate('managerId', value);
                 }}
               >
                 <SelectTrigger className="mt-1 h-8">
@@ -227,21 +179,21 @@ export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarP
                 <SelectContent>
                   <SelectItem value="none">No Manager</SelectItem>
                   {profiles
-                    .filter(p => p.id !== employee.id)
-                    .map((manager) => (
+                    .filter((p: any) => p.id !== employee.id)
+                    .map((manager: any) => (
                     <SelectItem key={manager.id} value={manager.id}>
-                      {manager.full_name}
+                      {manager.fullName}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             ) : (
               <p className="text-sm mt-1">
-                {profiles.find(p => p.id === employee.manager_id)?.full_name || 'No manager assigned'}
+                {profiles.find((p: any) => p.id === employee.managerId)?.fullName || 'No manager assigned'}
               </p>
             )}
           </div>
-          
+
           <div>
             <label className="text-sm font-medium text-muted-foreground">Location</label>
             <div className="flex items-center gap-1 mt-1">
@@ -259,7 +211,7 @@ export const EmployeeSidebar = ({ employee, onEmployeeUpdate }: EmployeeSidebarP
               )}
             </div>
           </div>
-          
+
           <div>
             <label className="text-sm font-medium text-muted-foreground">Status</label>
             <p className="text-sm mt-1">{employee.status || 'active'}</p>

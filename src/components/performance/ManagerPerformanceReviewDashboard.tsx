@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useState } from "react";
+import { trpc } from '@/lib/trpc';
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,104 +11,63 @@ import { EmptyState } from "@/components/ui/empty-state";
 
 interface DirectReport {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
   role: string;
-  avatar_url?: string;
-  latest_review?: {
+  avatarUrl?: string;
+  latestReview?: {
     id: string;
-    review_period: string;
+    reviewPeriod: string;
     status: string;
     rating?: number;
-    created_at: string;
+    createdAt: string;
   };
 }
 
 export function ManagerPerformanceReviewDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [directReports, setDirectReports] = useState<DirectReport[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState<DirectReport | null>(null);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      fetchDirectReports();
-    }
-  }, [user]);
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-  const fetchDirectReports = async () => {
-    try {
-      // First get the manager's profile ID
-      const { data: managerProfile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", user?.id)
-        .single();
+  const { data: allProfiles, isLoading: loading, refetch: refetchProfiles } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!myProfile,
+  });
 
-      if (!managerProfile) return;
+  const { data: allReviews } = trpc.reviews.list.useQuery(undefined, {
+    enabled: !!myProfile,
+  });
 
-      // Get direct reports with their latest review
-      const { data: reports } = await supabase
-        .from("profiles")
-        .select(`
-          id,
-          full_name,
-          email,
-          job_title,
-          avatar_url,
-          performance_reviews:performance_reviews!performance_reviews_employee_id_fkey (
-            id,
-            review_period_start,
-            review_period_end,
-            status,
-            overall_rating,
-            created_at
-          )
-        `)
-        .eq("manager_id", managerProfile.id)
-        .eq("status", "active");
+  // Build direct reports from profiles where managerId matches current user's profile id
+  const directReports: DirectReport[] = (allProfiles || [])
+    .filter((p: any) => p.managerId === myProfile?.id && p.status === 'active')
+    .map((report: any) => {
+      const reviews = (allReviews || [])
+        .filter((r: any) => r.employeeId === report.id)
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-      if (reports) {
-        const reportsWithLatestReview = reports.map(report => ({
-          id: report.id,
-          full_name: report.full_name || '',
-          email: report.email || '',
-          role: report.job_title || '',
-          avatar_url: report.avatar_url,
-          latest_review: report.performance_reviews?.length > 0 
-            ? (() => {
-                const sorted = report.performance_reviews.sort((a: any, b: any) => 
-                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-                );
-                const latest = sorted[0];
-                return {
-                  id: latest.id,
-                  review_period: latest.review_period_start && latest.review_period_end 
-                    ? `${latest.review_period_start} - ${latest.review_period_end}`
-                    : 'N/A',
-                  status: latest.status || 'draft',
-                  rating: latest.overall_rating,
-                  created_at: latest.created_at
-                };
-              })()
-            : undefined
-        }));
-
-        setDirectReports(reportsWithLatestReview);
-      }
-    } catch (error) {
-      console.error("Error fetching direct reports:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load direct reports",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+      const latest = reviews[0];
+      return {
+        id: report.id,
+        fullName: report.fullName || '',
+        email: report.email || '',
+        role: report.jobTitle || '',
+        avatarUrl: report.avatarUrl,
+        latestReview: latest ? {
+          id: latest.id,
+          reviewPeriod: latest.reviewPeriodStart && latest.reviewPeriodEnd
+            ? `${latest.reviewPeriodStart} - ${latest.reviewPeriodEnd}`
+            : 'N/A',
+          status: latest.status || 'draft',
+          rating: latest.overallRating,
+          createdAt: latest.createdAt,
+        } : undefined,
+      };
+    });
 
   const handleStartReview = (employee: DirectReport) => {
     setSelectedEmployee(employee);
@@ -173,7 +132,7 @@ export function ManagerPerformanceReviewDashboard() {
                       <User className="h-5 w-5" />
                     </div>
                     <div>
-                      <CardTitle className="text-lg">{employee.full_name}</CardTitle>
+                      <CardTitle className="text-lg">{employee.fullName}</CardTitle>
                       <CardDescription>{employee.role}</CardDescription>
                     </div>
                   </div>
@@ -187,26 +146,26 @@ export function ManagerPerformanceReviewDashboard() {
                 </div>
               </CardHeader>
               <CardContent>
-                {employee.latest_review ? (
+                {employee.latestReview ? (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-4">
                       <div className="flex items-center space-x-2">
                         <Calendar className="h-4 w-4 text-muted-foreground" />
                         <span className="text-sm text-muted-foreground">
-                          Latest: {employee.latest_review.review_period}
+                          Latest: {employee.latestReview.reviewPeriod}
                         </span>
                       </div>
-                      <Badge variant={getStatusColor(employee.latest_review.status)}>
-                        {employee.latest_review.status.replace("_", " ")}
+                      <Badge variant={getStatusColor(employee.latestReview.status)}>
+                        {employee.latestReview.status.replace("_", " ")}
                       </Badge>
-                      {employee.latest_review.rating && (
+                      {employee.latestReview.rating && (
                         <span className="text-sm font-medium">
-                          Rating: {employee.latest_review.rating}/5
+                          Rating: {employee.latestReview.rating}/5
                         </span>
                       )}
                     </div>
                     <span className="text-xs text-muted-foreground">
-                      {formatDate(employee.latest_review.created_at)}
+                      {formatDate(employee.latestReview.createdAt)}
                     </span>
                   </div>
                 ) : (
@@ -227,7 +186,7 @@ export function ManagerPerformanceReviewDashboard() {
           onClose={() => {
             setIsReviewModalOpen(false);
             setSelectedEmployee(null);
-            fetchDirectReports(); // Refresh the list
+            refetchProfiles();
           }}
         />
       )}

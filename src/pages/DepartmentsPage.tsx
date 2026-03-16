@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -19,8 +19,8 @@ interface Department {
   id: string;
   name: string;
   description: string | null;
-  head_id: string | null;
-  head?: { full_name: string | null } | null;
+  headId: string | null;
+  head?: { fullName: string | null } | null;
 }
 
 interface ResourceCounts {
@@ -61,98 +61,76 @@ export default function DepartmentsPage() {
   const { isSuperAdmin, isAdmin, loading: roleLoading } = useRole();
   const { organization } = useOrganization();
 
-  const [departments, setDepartments] = useState<Department[]>([]);
   const [activeDeptId, setActiveDeptId] = useState<string | null>(null);
-  const [counts, setCounts] = useState<Record<string, ResourceCounts>>({});
-  const [resources, setResources] = useState<DeptResources | null>(null);
-  const [loadingDepts, setLoadingDepts] = useState(true);
-  const [loadingResources, setLoadingResources] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth');
   }, [user, authLoading, navigate]);
 
+  // Fetch all departments
+  const { data: departmentsRaw, isLoading: loadingDepts } = trpc.departments.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+
+  // Fetch resource lists for counts
+  const { data: toolsList } = trpc.tools.list.useQuery();
+  const { data: meetingsList } = trpc.meetings.list.useQuery();
+  const { data: sopsList } = trpc.sops.list.useQuery();
+  const { data: measurablesList } = trpc.measurables.list.useQuery();
+  const { data: agentsList } = trpc.agents.list.useQuery();
+  const { data: profilesList } = trpc.profiles.list.useQuery();
+  const { data: teamsList } = trpc.teams.list.useQuery();
+
+  const departments: Department[] = (departmentsRaw || []).map((d: any) => ({
+    id: d.id,
+    name: d.name,
+    description: d.description ?? null,
+    headId: d.headId ?? null,
+    head: d.head ?? null,
+  }));
+
+  // Set first department as active when loaded
   useEffect(() => {
-    if (organization?.id) fetchDepartments();
-  }, [organization?.id]);
-
-  useEffect(() => {
-    if (activeDeptId) fetchDeptResources(activeDeptId);
-  }, [activeDeptId]);
-
-  const fetchDepartments = async () => {
-    try {
-      const { data: depts } = await supabase
-        .from('departments')
-        .select('id, name, description, head_id, head:profiles!departments_head_id_fkey(full_name)')
-        .order('name');
-
-      const list = depts || [];
-      setDepartments(list);
-      if (list.length > 0) setActiveDeptId(list[0].id);
-
-      // Fetch counts for all departments in parallel
-      if (list.length > 0) {
-        const deptIds = list.map(d => d.id);
-        const [toolsRes, meetingsRes, sopsRes, measRes, agentsRes, membersRes, teamsRes] = await Promise.all([
-          supabase.from('tools').select('department_id').in('department_id', deptIds),
-          supabase.from('meetings').select('department_id').in('department_id', deptIds),
-          supabase.from('sops').select('department_id').in('department_id', deptIds),
-          supabase.from('measurables').select('team_id, teams!inner(department_id)').filter('teams.department_id', 'in', `(${deptIds.join(',')})`),
-          supabase.from('agents').select('department_id').in('department_id', deptIds),
-          supabase.from('profiles').select('department_id').in('department_id', deptIds),
-          supabase.from('teams').select('department_id').in('department_id', deptIds),
-        ]);
-
-        const countMap: Record<string, ResourceCounts> = {};
-        list.forEach(d => {
-          countMap[d.id] = { tools: 0, meetings: 0, sops: 0, measurables: 0, agents: 0, members: 0, functions: 0 };
-        });
-
-        (toolsRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].tools++; });
-        (meetingsRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].meetings++; });
-        (sopsRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].sops++; });
-        (agentsRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].agents++; });
-        (membersRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].members++; });
-        (teamsRes.data || []).forEach(r => { if (r.department_id) countMap[r.department_id].functions++; });
-        // measurables via teams
-        (measRes.data || []).forEach((r: any) => {
-          const deptId = r.teams?.department_id;
-          if (deptId && countMap[deptId]) countMap[deptId].measurables++;
-        });
-
-        setCounts(countMap);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingDepts(false);
+    if (departments.length > 0 && !activeDeptId) {
+      setActiveDeptId(departments[0].id);
     }
-  };
+  }, [departments, activeDeptId]);
 
-  const fetchDeptResources = async (deptId: string) => {
-    setLoadingResources(true);
-    try {
-      const [toolsRes, meetingsRes, sopsRes, measRes, agentsRes] = await Promise.all([
-        supabase.from('tools').select('id, name, description').eq('department_id', deptId).limit(5).order('name'),
-        supabase.from('meetings').select('id, title, recurrence').eq('department_id', deptId).limit(5).order('title'),
-        supabase.from('sops').select('id, title, status').eq('department_id', deptId).limit(5).order('title'),
-        supabase.from('measurables').select('id, name, unit, teams!inner(department_id)').eq('teams.department_id', deptId).limit(5).order('name'),
-        supabase.from('agents').select('id, name, type').eq('department_id', deptId).limit(5).order('name'),
-      ]);
+  // Compute counts per department
+  const counts: Record<string, ResourceCounts> = {};
+  departments.forEach(d => {
+    counts[d.id] = { tools: 0, meetings: 0, sops: 0, measurables: 0, agents: 0, members: 0, functions: 0 };
+  });
+  (toolsList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].tools++; });
+  (meetingsList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].meetings++; });
+  (sopsList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].sops++; });
+  (agentsList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].agents++; });
+  (profilesList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].members++; });
+  (teamsList || []).forEach((r: any) => { if (r.departmentId && counts[r.departmentId]) counts[r.departmentId].functions++; });
+  // measurables via teams
+  (measurablesList || []).forEach((r: any) => {
+    const team = (teamsList || []).find((t: any) => t.id === r.teamId);
+    if (team?.departmentId && counts[team.departmentId]) counts[team.departmentId].measurables++;
+  });
 
-      setResources({
-        tools: (toolsRes.data || []).map(t => ({ id: t.id, name: t.name, subtitle: t.description })),
-        meetings: (meetingsRes.data || []).map(m => ({ id: m.id, name: m.title, subtitle: m.recurrence })),
-        sops: (sopsRes.data || []).map(s => ({ id: s.id, name: s.title, subtitle: s.status })),
-        measurables: (measRes.data || []).map((m: any) => ({ id: m.id, name: m.name, subtitle: m.unit })),
-        agents: (agentsRes.data || []).map((a: any) => ({ id: a.id, name: a.name, subtitle: a.type })),
-      });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingResources(false);
-    }
+  // Build resources for active department (top 5)
+  const buildResources = (deptId: string): DeptResources => {
+    const filterByDept = (list: any[], key: string = 'departmentId') =>
+      (list || []).filter((r: any) => r[key] === deptId).slice(0, 5);
+
+    return {
+      tools: filterByDept(toolsList || []).map((t: any) => ({ id: t.id, name: t.name, subtitle: t.description })),
+      meetings: filterByDept(meetingsList || []).map((m: any) => ({ id: m.id, name: m.title, subtitle: m.recurrence })),
+      sops: filterByDept(sopsList || []).map((s: any) => ({ id: s.id, name: s.title, subtitle: s.status })),
+      measurables: (measurablesList || [])
+        .filter((m: any) => {
+          const team = (teamsList || []).find((t: any) => t.id === m.teamId);
+          return team?.departmentId === deptId;
+        })
+        .slice(0, 5)
+        .map((m: any) => ({ id: m.id, name: m.name, subtitle: m.unit })),
+      agents: filterByDept(agentsList || []).map((a: any) => ({ id: a.id, name: a.name, subtitle: a.type })),
+    };
   };
 
   if (authLoading || roleLoading || loadingDepts) {
@@ -167,6 +145,7 @@ export default function DepartmentsPage() {
 
   const activeDept = departments.find(d => d.id === activeDeptId);
   const activeCounts = activeDeptId ? counts[activeDeptId] : null;
+  const resources = activeDeptId ? buildResources(activeDeptId) : null;
 
   return (
     <DashboardLayout title="Departments" description="Overview of all departments and their resources">
@@ -235,7 +214,7 @@ export default function DepartmentsPage() {
                   {activeDept.head && (
                     <div className="flex items-center gap-1 mt-1 text-sm text-muted-foreground">
                       <Users className="h-3.5 w-3.5" />
-                      <span>Head: {(activeDept.head as any).full_name}</span>
+                      <span>Head: {activeDept.head.fullName}</span>
                     </div>
                   )}
                 </div>
@@ -251,54 +230,48 @@ export default function DepartmentsPage() {
               </div>
 
               {/* Resource Cards Grid */}
-              {loadingResources ? (
-                <div className="flex items-center justify-center h-48">
-                  <Spinner size="md" />
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {resourceConfig.map(({ key, label, icon: Icon, color, bg }) => {
-                    const items = resources?.[key] || [];
-                    const count = activeCounts?.[key] ?? 0;
-                    return (
-                      <Card key={key} className="flex flex-col">
-                        <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className={cn("rounded-md p-1.5", bg)}>
-                                <Icon className={cn("h-4 w-4", color)} />
-                              </div>
-                              <CardTitle className="text-sm font-semibold">{label}</CardTitle>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {resourceConfig.map(({ key, label, icon: Icon, color, bg }) => {
+                  const items = resources?.[key] || [];
+                  const count = activeCounts?.[key] ?? 0;
+                  return (
+                    <Card key={key} className="flex flex-col">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className={cn("rounded-md p-1.5", bg)}>
+                              <Icon className={cn("h-4 w-4", color)} />
                             </div>
-                            <Badge variant="outline" className="text-xs">{count}</Badge>
+                            <CardTitle className="text-sm font-semibold">{label}</CardTitle>
                           </div>
-                        </CardHeader>
-                        <CardContent className="pt-0 flex-1">
-                          {items.length === 0 ? (
-                            <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} yet</p>
-                          ) : (
-                            <ul className="space-y-1.5">
-                              {items.map(item => (
-                                <li key={item.id} className="flex items-center justify-between gap-2">
-                                  <span className="text-sm truncate">{item.name}</span>
-                                  {item.subtitle && (
-                                    <span className="text-xs text-muted-foreground flex-shrink-0 capitalize">{item.subtitle}</span>
-                                  )}
-                                </li>
-                              ))}
-                              {count > 5 && (
-                                <li className="text-xs text-muted-foreground pt-1">
-                                  +{count - 5} more
-                                </li>
-                              )}
-                            </ul>
-                          )}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
+                          <Badge variant="outline" className="text-xs">{count}</Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0 flex-1">
+                        {items.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} yet</p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {items.map(item => (
+                              <li key={item.id} className="flex items-center justify-between gap-2">
+                                <span className="text-sm truncate">{item.name}</span>
+                                {item.subtitle && (
+                                  <span className="text-xs text-muted-foreground flex-shrink-0 capitalize">{item.subtitle}</span>
+                                )}
+                              </li>
+                            ))}
+                            {count > 5 && (
+                              <li className="text-xs text-muted-foreground pt-1">
+                                +{count - 5} more
+                              </li>
+                            )}
+                          </ul>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

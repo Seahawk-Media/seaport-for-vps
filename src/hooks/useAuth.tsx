@@ -1,13 +1,15 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '@/integrations/supabase/client';
+import { authClient } from '@/lib/auth-client';
+
+type User = { id: string; name: string; email: string; image?: string | null };
+type Session = { id: string; userId: string; token: string; expiresAt: Date };
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
-  signUp: (email: string, password: string, fullName?: string) => Promise<{ error: any }>;
-  signIn: (email: string, password: string) => Promise<{ error: any; data: { user: User | null } | null }>;
+  signUp: (email: string, password: string, fullName?: string) => Promise<{ error: { message?: string } | null }>;
+  signIn: (email: string, password: string) => Promise<{ error: { message?: string } | null; data: { user: User | null } | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -30,50 +32,67 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // Set up auth state listener FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setLoading(false);
+  const fetchSession = async () => {
+    try {
+      const result = await authClient.getSession();
+      if (result?.data?.session && result?.data?.user) {
+        setUser(result.data.user as User);
+        setSession({
+          id: result.data.session.id,
+          userId: result.data.session.userId,
+          token: result.data.session.token,
+          expiresAt: result.data.session.expiresAt,
+        });
+      } else {
+        setUser(null);
+        setSession(null);
       }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    } catch {
+      setUser(null);
+      setSession(null);
+    } finally {
       setLoading(false);
-    });
+    }
+  };
 
-    return () => subscription.unsubscribe();
+  useEffect(() => {
+    fetchSession();
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const redirectUrl = `${window.location.origin}/`;
-    
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: fullName ? { full_name: fullName } : undefined
+    try {
+      const result = await authClient.signUp.email({
+        email,
+        password,
+        name: fullName || email.split('@')[0],
+      });
+      if (result?.error) {
+        return { error: result.error };
       }
-    });
-    return { error };
+      await fetchSession();
+      return { error: null };
+    } catch (error) {
+      return { error: { message: error instanceof Error ? error.message : 'An unexpected error occurred' } };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error, data } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    return { error, data: data ? { user: data.user } : null };
+    try {
+      const result = await authClient.signIn.email({ email, password });
+      if (result?.error) {
+        return { error: result.error, data: null };
+      }
+      await fetchSession();
+      return { error: null, data: { user: result?.data?.user as User | null } };
+    } catch (error) {
+      return { error: { message: error instanceof Error ? error.message : 'An unexpected error occurred' }, data: null };
+    }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await authClient.signOut();
+    setUser(null);
+    setSession(null);
   };
 
   const value = {

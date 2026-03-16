@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import React, { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, FileText, Edit, Trash2, Eye, Search, Building, Users } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -29,9 +29,9 @@ interface SOP {
   category: string | null;
   version: string | null;
   status: string | null;
-  team_id: string | null;
-  department_id: string | null;
-  team?: { id: string; name: string; department_id: string | null } | null;
+  teamId: string | null;
+  departmentId: string | null;
+  team?: { id: string; name: string; departmentId: string | null } | null;
 }
 
 interface Department {
@@ -42,14 +42,10 @@ interface Department {
 interface Team {
   id: string;
   name: string;
-  department_id: string | null;
+  departmentId: string | null;
 }
 
 export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllFunctions = false, showDeptAll = false }) => {
-  const [sops, setSOPs] = useState<SOP[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewingSOP, setViewingSOP] = useState<SOP | null>(null);
   const [editingSOP, setEditingSOP] = useState<SOP | null>(null);
@@ -59,7 +55,7 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
     category: '',
     version: '1.0',
     status: 'active',
-    team_id: ''
+    teamId: ''
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -69,107 +65,96 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
   const { organization } = useOrganization();
 
   const canManage = isAdmin() || isSuperAdmin() || isManager();
+  const utils = trpc.useUtils();
 
-  useEffect(() => {
-    fetchData();
-  }, [departmentId, teamId, showAllFunctions, showDeptAll]);
+  const sopsQuery = trpc.sops.list.useQuery();
+  const departmentsQuery = trpc.departments.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
 
-  const fetchData = async () => {
-    try {
-      let query = supabase.from('sops').select('*, team:teams(id, name, department_id)');
-      
-      if (showAllFunctions) {
-        // Show all SOPs across all functions
-      } else if (teamId) {
-        query = query.eq('team_id', teamId);
-      } else if (showDeptAll && departmentId) {
-        // Department master list: all SOPs where department_id matches (incl. function-level)
-        query = query.eq('department_id', departmentId);
-      } else if (departmentId) {
-        query = query.eq('department_id', departmentId).is('team_id', null);
-      }
+  const createMutation = trpc.sops.create.useMutation({
+    onSuccess: () => {
+      toast({ title: "SOP created" });
+      resetForm();
+      utils.sops.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      const [sopsRes, deptRes, teamsRes] = await Promise.all([
-        query.order('title'),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('teams').select('id, name, department_id').order('name')
-      ]);
+  const updateMutation = trpc.sops.update.useMutation({
+    onSuccess: () => {
+      toast({ title: "SOP updated" });
+      resetForm();
+      utils.sops.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      if (sopsRes.error) throw sopsRes.error;
-      setSOPs(sopsRes.data || []);
-      setDepartments(deptRes.data || []);
-      setTeams(teamsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching SOPs:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const deleteMutation = trpc.sops.delete.useMutation({
+    onSuccess: () => {
+      toast({ title: "SOP deleted" });
+      utils.sops.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const allSops = (sopsQuery.data || []) as SOP[];
+  const departments = (departmentsQuery.data || []) as Department[];
+  const teams = (teamsQuery.data || []) as Team[];
+  const loading = sopsQuery.isLoading;
+
+  // Filter SOPs based on scope
+  const sops = allSops.filter(sop => {
+    if (showAllFunctions) return true;
+    if (teamId) return sop.teamId === teamId;
+    if (showDeptAll && departmentId) return sop.departmentId === departmentId;
+    if (departmentId) return sop.departmentId === departmentId && !sop.teamId;
+    return true;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization) return;
 
-    if (showAllFunctions && !formData.team_id) {
+    if (showAllFunctions && !formData.teamId) {
       toast({ title: "Error", description: "Please select a function", variant: "destructive" });
       return;
     }
 
-    const selectedTeam = teams.find(t => t.id === formData.team_id);
+    const selectedTeam = teams.find(t => t.id === formData.teamId);
 
-    try {
-      const payload = {
+    if (editingSOP) {
+      updateMutation.mutate({
+        id: editingSOP.id,
         title: formData.title,
-        content: formData.content || null,
-        category: formData.category || null,
-        version: formData.version,
+        content: formData.content || undefined,
+        category: formData.category || undefined,
         status: formData.status,
-        team_id: showAllFunctions ? (formData.team_id || null) : (teamId || null),
-        department_id: showAllFunctions ? (selectedTeam?.department_id || null) : (departmentId || null),
-      };
-
-      if (editingSOP) {
-        const { error } = await supabase
-          .from('sops')
-          .update(payload)
-          .eq('id', editingSOP.id);
-
-        if (error) throw error;
-        toast({ title: "SOP updated" });
-      } else {
-        const { error } = await supabase
-          .from('sops')
-          .insert({
-            ...payload,
-            organization_id: organization.id,
-          });
-
-        if (error) throw error;
-        toast({ title: "SOP created" });
-      }
-
-      resetForm();
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      });
+    } else {
+      createMutation.mutate({
+        title: formData.title,
+        content: formData.content || undefined,
+        category: formData.category || undefined,
+        departmentId: showAllFunctions ? (selectedTeam?.departmentId || undefined) : (departmentId || undefined),
+        teamId: showAllFunctions ? (formData.teamId || undefined) : (teamId || undefined),
+      });
     }
   };
 
   const resetForm = () => {
     setDialogOpen(false);
     setEditingSOP(null);
-    setFormData({ title: '', content: '', category: '', version: '1.0', status: 'active', team_id: '' });
+    setFormData({ title: '', content: '', category: '', version: '1.0', status: 'active', teamId: '' });
   };
 
-  const handleDelete = async (id: string) => {
-    try {
-      const { error } = await supabase.from('sops').delete().eq('id', id);
-      if (error) throw error;
-      toast({ title: "SOP deleted" });
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate({ id });
   };
 
   const openEdit = (sop: SOP) => {
@@ -180,7 +165,7 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
       category: sop.category || '',
       version: sop.version || '1.0',
       status: sop.status || 'active',
-      team_id: sop.team_id || ''
+      teamId: sop.teamId || ''
     });
     setDialogOpen(true);
   };
@@ -198,17 +183,17 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
     const matchesSearch = sop.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (sop.content?.toLowerCase().includes(searchTerm.toLowerCase())) ||
                          (sop.category?.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const sopDeptId = sop.team?.department_id || sop.department_id;
+
+    const sopDeptId = sop.team?.departmentId || sop.departmentId;
     const matchesDept = filterDepartment === 'all' || sopDeptId === filterDepartment;
-    const matchesFunc = filterFunction === 'all' || sop.team_id === filterFunction;
-    
+    const matchesFunc = filterFunction === 'all' || sop.teamId === filterFunction;
+
     return matchesSearch && matchesDept && matchesFunc;
   });
 
-  const filteredTeams = filterDepartment === 'all' 
-    ? teams 
-    : teams.filter(t => t.department_id === filterDepartment);
+  const filteredTeams = filterDepartment === 'all'
+    ? teams
+    : teams.filter(t => t.departmentId === filterDepartment);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-muted-foreground">Loading SOPs...</div>;
@@ -237,13 +222,13 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
                 {(showAllFunctions || editingSOP) && (
                   <div className="space-y-2">
                     <Label>Function *</Label>
-                    <Select value={formData.team_id} onValueChange={(v) => setFormData({ ...formData, team_id: v })}>
+                    <Select value={formData.teamId} onValueChange={(v) => setFormData({ ...formData, teamId: v })}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select function" />
                       </SelectTrigger>
                       <SelectContent>
                         {teams.map(team => {
-                          const dept = departments.find(d => d.id === team.department_id);
+                          const dept = departments.find(d => d.id === team.departmentId);
                           return (
                             <SelectItem key={team.id} value={team.id}>
                               {team.name} {dept && <span className="text-muted-foreground">({dept.name})</span>}
@@ -376,7 +361,7 @@ export const SOPsTab: React.FC<SOPsTabProps> = ({ departmentId, teamId, showAllF
             </TableHeader>
             <TableBody>
               {filteredSOPs.map((sop) => {
-                const dept = departments.find(d => d.id === (sop.team?.department_id || sop.department_id));
+                const dept = departments.find(d => d.id === (sop.team?.departmentId || sop.departmentId));
                 return (
                   <TableRow key={sop.id} className="cursor-pointer" onClick={() => setViewingSOP(sop)}>
                     <TableCell className="font-medium">{sop.title}</TableCell>

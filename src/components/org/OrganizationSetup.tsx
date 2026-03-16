@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { Building2, Bot, LayoutGrid, Users } from 'lucide-react';
 
 interface OrganizationSetupProps {
@@ -16,7 +16,7 @@ const steps = [
   {
     icon: <Users className="h-4 w-4" />,
     label: 'Structure your org',
-    desc: 'Departments → Functions → People',
+    desc: 'Departments \u2192 Functions \u2192 People',
   },
   {
     icon: <Bot className="h-4 w-4" />,
@@ -31,48 +31,28 @@ const steps = [
 ];
 
 export const OrganizationSetup = ({ onComplete }: OrganizationSetupProps) => {
-  const [formData, setFormData] = useState({ organizationName: '', fullName: '' });
-  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState({ organizationName: '', fullName: '', email: '', password: '' });
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const checkPendingInvite = async () => {
-      const { data, error } = await supabase
-        .from('invitations')
-        .select('id')
-        .is('accepted_at', null)
-        .gt('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (error) { console.log('Error checking invitations in setup:', error); return; }
-      if (data && data.length > 0) navigate(`/accept-invitation?invitation=${data[0].id}`);
-    };
-    checkPendingInvite();
-  }, [navigate]);
-
-  const generateSlug = (name: string) =>
-    name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const setupMutation = trpc.setup.complete.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Organization created', description: "Your workspace is ready. Let's build your org." });
+      onComplete();
+    },
+    onError: (error) => {
+      toast({ title: 'Error creating organization', description: error.message, variant: 'destructive' });
+    },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    try {
-      const slug = generateSlug(formData.organizationName);
-      const { error } = await supabase.rpc('create_organization_and_profile', {
-        org_name: formData.organizationName,
-        org_slug: slug,
-        user_full_name: formData.fullName,
-      });
-      if (error) throw error;
-      toast({ title: 'Organization created', description: "Your workspace is ready. Let's build your org." });
-      onComplete();
-    } catch (error: any) {
-      toast({ title: 'Error creating organization', description: error.message, variant: 'destructive' });
-    } finally {
-      setLoading(false);
-    }
+    setupMutation.mutate({
+      orgName: formData.organizationName,
+      adminName: formData.fullName,
+      adminEmail: formData.email,
+      adminPassword: formData.password,
+    });
   };
 
   return (
@@ -87,7 +67,7 @@ export const OrganizationSetup = ({ onComplete }: OrganizationSetupProps) => {
           </div>
           <h1 className="text-2xl font-bold">Set up your organization</h1>
           <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-            You're creating an open org workspace. Structure your people, departments, and functions — 
+            You're creating an open org workspace. Structure your people, departments, and functions —
             then plug in AI agents and centralize your internal apps.
           </p>
         </div>
@@ -124,7 +104,32 @@ export const OrganizationSetup = ({ onComplete }: OrganizationSetupProps) => {
                   value={formData.fullName}
                   onChange={(e) => setFormData(prev => ({ ...prev, fullName: e.target.value }))}
                   required
-                  disabled={loading}
+                  disabled={setupMutation.isPending}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="jane@example.com"
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  required
+                  disabled={setupMutation.isPending}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Min. 8 characters"
+                  value={formData.password}
+                  onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                  required
+                  minLength={8}
+                  disabled={setupMutation.isPending}
                 />
               </div>
               <div className="space-y-2">
@@ -136,18 +141,18 @@ export const OrganizationSetup = ({ onComplete }: OrganizationSetupProps) => {
                   value={formData.organizationName}
                   onChange={(e) => setFormData(prev => ({ ...prev, organizationName: e.target.value }))}
                   required
-                  disabled={loading}
+                  disabled={setupMutation.isPending}
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Creating workspace...' : 'Create Organization'}
+              <Button type="submit" className="w-full" disabled={setupMutation.isPending}>
+                {setupMutation.isPending ? 'Creating workspace...' : 'Create Organization'}
               </Button>
             </form>
           </CardContent>
         </Card>
 
         <p className="text-center text-xs text-muted-foreground">
-          Open source · Self-hostable · Departments → Functions → People
+          Open source {'\u00B7'} Self-hostable {'\u00B7'} Departments {'\u2192'} Functions {'\u2192'} People
         </p>
       </div>
     </div>

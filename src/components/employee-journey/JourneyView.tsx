@@ -1,60 +1,27 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState } from 'react';
+import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Plus, Calendar, User, Award, FileText, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { AddEventModal } from './AddEventModal';
 
-interface JourneyEvent {
-  id: string;
-  event_type: string;
-  title: string;
-  description: string;
-  metadata: any;
-  created_at: string;
-  created_by: string;
-  creator_name?: string;
-}
-
 interface JourneyViewProps {
   employeeId: string;
 }
 
 export const JourneyView = ({ employeeId }: JourneyViewProps) => {
-  const [events, setEvents] = useState<JourneyEvent[]>([]);
-  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  useEffect(() => {
-    fetchJourneyEvents();
-  }, [employeeId]);
-
-  const fetchJourneyEvents = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('trail_events')
-        .select(`
-          *,
-          profile:profiles!trail_events_profile_id_fkey(full_name)
-        `)
-        .eq('profile_id', employeeId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      const eventsWithCreatorName = data?.map(event => ({
-        ...event,
-        creator_name: event.profile?.full_name || 'Unknown'
-      })) || [];
-
-      setEvents(eventsWithCreatorName);
-    } catch (error) {
-      console.error('Error fetching journey events:', error);
-    } finally {
-      setLoading(false);
+  const { data: events = [], isLoading: loading, refetch } = trpc.activity.list.useQuery(
+    { limit: 100 },
+    {
+      select: (data) =>
+        data
+          .filter((e: any) => e.profileId === employeeId)
+          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
     }
-  };
+  );
 
   const getEventIcon = (eventType: string) => {
     switch (eventType) {
@@ -95,7 +62,7 @@ export const JourneyView = ({ employeeId }: JourneyViewProps) => {
   };
 
   const handleEventAdded = () => {
-    fetchJourneyEvents();
+    refetch();
     setIsModalOpen(false);
   };
 
@@ -133,35 +100,28 @@ export const JourneyView = ({ employeeId }: JourneyViewProps) => {
         </Card>
       ) : (
         <div className="space-y-4">
-          {events.map((event) => (
+          {events.map((event: any) => (
             <Card key={event.id} className="relative">
               <CardContent className="p-6">
                 <div className="flex items-start gap-4">
                   <div className="flex-shrink-0">
-                    <div className={`p-2 rounded-full ${getEventColor(event.event_type)}`}>
-                      {getEventIcon(event.event_type)}
+                    <div className={`p-2 rounded-full ${getEventColor(event.activityType)}`}>
+                      {getEventIcon(event.activityType)}
                     </div>
                   </div>
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center justify-between">
-                      <h4 className="font-semibold text-foreground">{event.title}</h4>
+                      <h4 className="font-semibold text-foreground">{event.description}</h4>
                       <div className="flex items-center gap-2">
-                        <Badge variant="outline" className={getEventColor(event.event_type)}>
-                          {event.event_type.replace('_', ' ')}
+                        <Badge variant="outline" className={getEventColor(event.activityType)}>
+                          {event.activityType.replace('_', ' ')}
                         </Badge>
                       </div>
                     </div>
-                    {event.description && (
-                      <p className="text-muted-foreground">{event.description}</p>
-                    )}
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
-                        {formatDate(event.created_at)}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <User className="w-3 h-3" />
-                        Added by {event.creator_name}
+                        {formatDate(event.createdAt)}
                       </div>
                     </div>
                   </div>

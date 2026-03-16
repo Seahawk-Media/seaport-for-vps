@@ -1,21 +1,8 @@
-import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Users } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { ArrowLeft } from 'lucide-react';
+import { trpc } from '@/lib/trpc';
 import { JourneyView } from './JourneyView';
 import { EmployeeSidebar } from './EmployeeSidebar';
-
-interface Profile {
-  id: string;
-  full_name: string;
-  email: string;
-  job_title?: string;
-  department_id?: string;
-  location?: string;
-  status?: string;
-  avatar_url?: string;
-  manager_id?: string;
-}
 
 interface EmployeeJourneyProps {
   employeeId: string;
@@ -23,29 +10,7 @@ interface EmployeeJourneyProps {
 }
 
 export const EmployeeJourney = ({ employeeId, onBack }: EmployeeJourneyProps) => {
-  const [employee, setEmployee] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchEmployee();
-  }, [employeeId]);
-
-  const fetchEmployee = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', employeeId)
-        .single();
-
-      if (error) throw error;
-      setEmployee(data);
-    } catch (error) {
-      console.error('Error fetching employee:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data: employee, isLoading: loading, refetch } = trpc.profiles.get.useQuery({ id: employeeId });
 
   if (loading) {
     return (
@@ -73,7 +38,7 @@ export const EmployeeJourney = ({ employeeId, onBack }: EmployeeJourneyProps) =>
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
       {/* Sidebar */}
       <div className="lg:col-span-1">
-        <EmployeeSidebar employee={employee} onEmployeeUpdate={fetchEmployee} />
+        <EmployeeSidebar employee={employee} onEmployeeUpdate={() => refetch()} />
       </div>
 
       {/* Main Content */}

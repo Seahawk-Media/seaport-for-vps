@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Plus, Pencil, Trash2, Trophy } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useToast } from "@/hooks/use-toast";
 
@@ -16,91 +16,55 @@ interface IncentiveType {
   id: string;
   name: string;
   description: string | null;
-  default_points: number;
-  is_active: boolean;
+  defaultPoints: number;
+  isActive: boolean;
 }
 
 export const BountyTypesManagement: React.FC = () => {
-  const [incentiveTypes, setIncentiveTypes] = useState<IncentiveType[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingType, setEditingType] = useState<IncentiveType | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    default_points: 10,
-    is_active: true
+    defaultPoints: 10,
+    isActive: true
   });
 
   const { organization } = useOrganization();
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (organization?.id) {
-      fetchIncentiveTypes();
-    }
-  }, [organization?.id]);
+  const utils = trpc.useUtils();
+  const { data: incentiveTypesRaw, isLoading: loading } = trpc.incentives.listTypes.useQuery();
+  const incentiveTypes: IncentiveType[] = (incentiveTypesRaw || []) as IncentiveType[];
 
-  const fetchIncentiveTypes = async () => {
-    if (!organization?.id) return;
+  const createType = trpc.incentives.createType.useMutation({
+    onSuccess: () => {
+      utils.incentives.listTypes.invalidate();
+      toast({ title: "Success", description: "Incentive type created" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create incentive type", variant: "destructive" });
+    },
+  });
 
-    setLoading(true);
-    const { data, error } = await (supabase
-      .from('incentive_types' as any)
-      .select('*')
-      .eq('organization_id', organization.id)
-      .order('name') as any);
-
-    if (error) {
-      console.error('Error fetching incentive types:', error);
-      toast({ title: "Error", description: "Failed to load incentive types", variant: "destructive" });
-    } else {
-      setIncentiveTypes(data || []);
-    }
-    setLoading(false);
-  };
+  // TODO: No incentives.updateType or incentives.deleteType tRPC routes available yet
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization?.id) return;
 
     if (editingType) {
-      const { error } = await (supabase
-        .from('incentive_types' as any)
-        .update({
-          name: formData.name,
-          description: formData.description || null,
-          default_points: formData.default_points,
-          is_active: formData.is_active
-        })
-        .eq('id', editingType.id) as any);
-
-      if (error) {
-        toast({ title: "Error", description: "Failed to update incentive type", variant: "destructive" });
-      } else {
-        toast({ title: "Success", description: "Incentive type updated" });
-        fetchIncentiveTypes();
-        resetForm();
-      }
-    } else {
-      const { error } = await (supabase
-        .from('incentive_types' as any)
-        .insert({
-          organization_id: organization.id,
-          name: formData.name,
-          description: formData.description || null,
-          default_points: formData.default_points,
-          is_active: formData.is_active
-        }) as any);
-
-      if (error) {
-        toast({ title: "Error", description: "Failed to create incentive type", variant: "destructive" });
-      } else {
-        toast({ title: "Success", description: "Incentive type created" });
-        fetchIncentiveTypes();
-        resetForm();
-      }
+      // TODO: Add incentives.updateType tRPC route
+      toast({ title: "Not available", description: "Bounty type editing is coming soon", variant: "destructive" });
+      return;
     }
+
+    createType.mutate({
+      name: formData.name,
+      description: formData.description || undefined,
+      defaultPoints: formData.defaultPoints,
+    });
   };
 
   const handleEdit = (incentiveType: IncentiveType) => {
@@ -108,29 +72,20 @@ export const BountyTypesManagement: React.FC = () => {
     setFormData({
       name: incentiveType.name,
       description: incentiveType.description || '',
-      default_points: incentiveType.default_points,
-      is_active: incentiveType.is_active
+      defaultPoints: incentiveType.defaultPoints,
+      isActive: incentiveType.isActive
     });
     setDialogOpen(true);
   };
 
   const handleDelete = async (id: string) => {
-    const { error } = await (supabase
-      .from('incentive_types' as any)
-      .delete()
-      .eq('id', id) as any);
-
-    if (error) {
-      toast({ title: "Error", description: "Failed to delete incentive type", variant: "destructive" });
-    } else {
-      toast({ title: "Success", description: "Incentive type deleted" });
-      fetchIncentiveTypes();
-    }
+    // TODO: Add incentives.deleteType tRPC route
+    toast({ title: "Not available", description: "Bounty type deletion is coming soon", variant: "destructive" });
   };
 
   const resetForm = () => {
     setEditingType(null);
-    setFormData({ name: '', description: '', default_points: 10, is_active: true });
+    setFormData({ name: '', description: '', defaultPoints: 10, isActive: true });
     setDialogOpen(false);
   };
 
@@ -188,15 +143,15 @@ export const BountyTypesManagement: React.FC = () => {
                   id="points"
                   type="number"
                   min="1"
-                  value={formData.default_points}
-                  onChange={(e) => setFormData({ ...formData, default_points: parseInt(e.target.value) || 10 })}
+                  value={formData.defaultPoints}
+                  onChange={(e) => setFormData({ ...formData, defaultPoints: parseInt(e.target.value) || 10 })}
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <Switch
                   id="active"
-                  checked={formData.is_active}
-                  onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
+                  checked={formData.isActive}
+                  onCheckedChange={(checked) => setFormData({ ...formData, isActive: checked })}
                 />
                 <Label htmlFor="active">Active</Label>
               </div>
@@ -234,12 +189,12 @@ export const BountyTypesManagement: React.FC = () => {
                 <TableRow key={type.id}>
                   <TableCell className="font-medium">{type.name}</TableCell>
                   <TableCell className="text-muted-foreground">{type.description || '-'}</TableCell>
-                  <TableCell>{type.default_points}</TableCell>
+                  <TableCell>{type.defaultPoints}</TableCell>
                   <TableCell>
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                      type.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                      type.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
                     }`}>
-                      {type.is_active ? 'Active' : 'Inactive'}
+                      {type.isActive ? 'Active' : 'Inactive'}
                     </span>
                   </TableCell>
                   <TableCell>

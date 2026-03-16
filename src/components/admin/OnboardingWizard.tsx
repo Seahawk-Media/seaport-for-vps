@@ -18,7 +18,9 @@ function loadState(): OnboardingState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch {
+    // If localStorage is unavailable or corrupted, fall back to defaults
+  }
   return { dismissed: false, checked: {}, openStep: 0 };
 }
 

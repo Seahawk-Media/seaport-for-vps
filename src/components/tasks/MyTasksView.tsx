@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CheckSquare, Calendar, LayoutList, Columns, Edit, Trash2, Tag } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useToast } from "@/hooks/use-toast";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useAuth } from "@/hooks/useAuth";
@@ -34,12 +34,12 @@ interface Task {
   description: string | null;
   status: string | null;
   priority: string | null;
-  due_date: string | null;
-  assigned_to: string | null;
-  team_id: string | null;
-  department_id: string | null;
+  dueDate: string | null;
+  assignedTo: string | null;
+  teamId: string | null;
+  departmentId: string | null;
   team?: { id: string; name: string } | null;
-  assignee?: { id: string; full_name: string | null; avatar_url: string | null } | null;
+  assignee?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
   department?: { id: string; name: string } | null;
 }
 
@@ -139,16 +139,16 @@ const SortableKanbanCard = ({
         <PriorityBadge priority={task.priority} />
       </div>
       <div className="flex items-center justify-between mt-2">
-        {task.due_date ? (
+        {task.dueDate ? (
           <span className="text-xs text-muted-foreground flex items-center gap-1">
             <Calendar className="h-2.5 w-2.5" />
-            {format(new Date(task.due_date + 'T00:00:00'), 'MMM d')}
+            {format(new Date(task.dueDate + 'T00:00:00'), 'MMM d')}
           </span>
         ) : <span />}
         {task.assignee && (
           <Avatar className="h-5 w-5">
-            <AvatarImage src={task.assignee.avatar_url || ''} />
-            <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.full_name)}</AvatarFallback>
+            <AvatarImage src={task.assignee.avatarUrl || ''} />
+            <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.fullName)}</AvatarFallback>
           </Avatar>
         )}
       </div>
@@ -157,8 +157,6 @@ const SortableKanbanCard = ({
 };
 
 export const MyTasksView: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { toast } = useToast();
@@ -170,43 +168,42 @@ export const MyTasksView: React.FC = () => {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
-  useEffect(() => {
-    if (organization && user) fetchMyTasks();
-  }, [organization, user]);
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-  const fetchMyTasks = async () => {
-    if (!user || !organization) return;
-    setLoading(true);
-    try {
-      // Get current user's profile id
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+  const { data: tasksRaw, isLoading: loading, refetch: refetchTasks } = trpc.tasks.list.useQuery(undefined, {
+    enabled: !!organization && !!user,
+  });
 
-      if (!profile) { setLoading(false); return; }
+  const updateTask = trpc.tasks.update.useMutation();
+  const deleteTask = trpc.tasks.delete.useMutation();
 
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*, team:teams(id, name), assignee:profiles!tasks_assigned_to_fkey(id, full_name, avatar_url), department:departments(id, name)')
-        .eq('organization_id', organization.id)
-        .eq('assigned_to', profile.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setTasks((data || []) as unknown as Task[]);
-    } catch (err) {
-      console.error('Error fetching my tasks:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Filter tasks assigned to current user
+  const tasks: Task[] = (tasksRaw || [])
+    .filter((t: any) => t.assignedTo === myProfile?.id)
+    .map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description ?? null,
+      status: t.status ?? null,
+      priority: t.priority ?? null,
+      dueDate: t.dueDate ?? null,
+      assignedTo: t.assignedTo ?? null,
+      teamId: t.teamId ?? null,
+      departmentId: t.departmentId ?? null,
+      team: t.team ?? null,
+      assignee: t.assignee ?? null,
+      department: t.department ?? null,
+    }));
 
   const quickStatusChange = async (taskId: string, newStatus: string) => {
-    const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
-    if (!error) fetchMyTasks();
-    else toast({ title: "Error", description: error.message, variant: "destructive" });
+    try {
+      await updateTask.mutateAsync({ id: taskId, status: newStatus });
+      refetchTasks();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -215,9 +212,13 @@ export const MyTasksView: React.FC = () => {
       toast({ title: "Permission denied", description: "Only managers and admins can delete tasks.", variant: "destructive" });
       return;
     }
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Task deleted" }); fetchMyTasks(); }
+    try {
+      await deleteTask.mutateAsync({ id });
+      toast({ title: "Task deleted" });
+      refetchTasks();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -235,9 +236,12 @@ export const MyTasksView: React.FC = () => {
     if (!overStatus) return;
     const task = tasks.find(t => t.id === taskId);
     if (!task || task.status === overStatus) return;
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: overStatus } : t));
-    const { error } = await supabase.from('tasks').update({ status: overStatus }).eq('id', taskId);
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); fetchMyTasks(); }
+    try {
+      await updateTask.mutateAsync({ id: taskId, status: overStatus });
+      refetchTasks();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
   };
 
   if (loading) {
@@ -311,15 +315,15 @@ export const MyTasksView: React.FC = () => {
                 {task.assignee ? (
                   <div className="flex items-center gap-1.5">
                     <Avatar className="h-6 w-6">
-                      <AvatarImage src={task.assignee.avatar_url || ''} />
-                      <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.full_name)}</AvatarFallback>
+                      <AvatarImage src={task.assignee.avatarUrl || ''} />
+                      <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(task.assignee.fullName)}</AvatarFallback>
                     </Avatar>
                     <span className="text-xs text-muted-foreground truncate max-w-[60px] hidden sm:block">
-                      {task.assignee.full_name?.split(' ')[0]}
+                      {task.assignee.fullName?.split(' ')[0]}
                     </span>
                   </div>
                 ) : (
-                  <span className="text-xs text-muted-foreground/40">—</span>
+                  <span className="text-xs text-muted-foreground/40">-</span>
                 )}
               </div>
               <div className="w-24 flex justify-center">
@@ -335,13 +339,13 @@ export const MyTasksView: React.FC = () => {
                 </Select>
               </div>
               <div className="w-20 flex justify-center">
-                {task.due_date ? (
+                {task.dueDate ? (
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
-                    {format(new Date(task.due_date + 'T00:00:00'), 'MMM d')}
+                    {format(new Date(task.dueDate + 'T00:00:00'), 'MMM d')}
                   </span>
                 ) : (
-                  <span className="text-xs text-muted-foreground/40">—</span>
+                  <span className="text-xs text-muted-foreground/40">-</span>
                 )}
               </div>
               <div className="w-16 flex justify-center gap-1">

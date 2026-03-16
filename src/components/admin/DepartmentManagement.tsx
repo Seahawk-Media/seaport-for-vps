@@ -1,167 +1,119 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import React, { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Building2, Edit, Trash2, Crown } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 
 interface Department {
   id: string;
   name: string;
   description: string | null;
-  parent_id: string | null;
-  head_id: string | null;
-  organization_id: string;
-  created_at: string;
-  updated_at?: string;
-  parent_department?: {
+  parentId: string | null;
+  headId: string | null;
+  organizationId: string;
+  createdAt: string;
+  updatedAt?: string;
+  parentDepartment?: {
     name: string;
   } | null;
-  department_head?: {
+  departmentHead?: {
     id: string;
-    full_name: string;
+    fullName: string;
     email: string;
   } | null;
 }
 
 interface Profile {
   id: string;
-  full_name: string;
+  fullName: string;
   email: string;
 }
 
 export const DepartmentManagement: React.FC = () => {
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    parent_id: '',
-    head_id: ''
+    parentId: '',
+    headId: ''
   });
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchDepartments();
-    fetchProfiles();
-  }, []);
+  const utils = trpc.useUtils();
+  const { data: departmentsRaw, isLoading: loading } = trpc.departments.list.useQuery();
+  const { data: profilesRaw } = trpc.profiles.list.useQuery();
 
-  const fetchDepartments = async () => {
-    try {
-      // Fetch departments with head info only (skip self-reference join)
-      const { data, error } = await supabase
-        .from('departments')
-        .select(`
-          *,
-          department_head:profiles!departments_head_id_fkey(id, full_name, email)
-        `)
-        .order('name');
+  // Transform departments to include parent department names
+  const departments: Department[] = (departmentsRaw ?? []).map((dept) => {
+    const deptMap = new Map((departmentsRaw ?? []).map((d) => [d.id, d.name]));
+    return {
+      ...dept,
+      parentDepartment: dept.parentId ? { name: deptMap.get(dept.parentId) || 'Unknown' } : null,
+      departmentHead: (dept as Department).departmentHead || null,
+    } as Department;
+  });
 
-      if (error) throw error;
-      
-      // Manually resolve parent department names
-      const deptMap = new Map((data || []).map(d => [d.id, d.name]));
-      
-      const transformedData = (data || []).map(dept => ({
-        ...dept,
-        parent_department: dept.parent_id ? { name: deptMap.get(dept.parent_id) || 'Unknown' } : null
-      }));
-      
-      setDepartments(transformedData);
-    } catch (error) {
-      console.error('Error fetching departments:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch departments",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const profiles: Profile[] = (profilesRaw ?? []).map((p) => ({
+    id: p.id,
+    fullName: p.fullName,
+    email: p.email,
+  }));
 
-  const fetchProfiles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, email')
-        .order('full_name');
+  const createDepartment = trpc.departments.create.useMutation({
+    onSuccess: () => {
+      utils.departments.list.invalidate();
+      toast({ title: "Success", description: "Department created successfully" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save department", variant: "destructive" });
+    },
+  });
 
-      if (error) throw error;
-      setProfiles(data || []);
-    } catch (error) {
-      console.error('Error fetching profiles:', error);
-    }
-  };
+  const updateDepartment = trpc.departments.update.useMutation({
+    onSuccess: () => {
+      utils.departments.list.invalidate();
+      toast({ title: "Success", description: "Department updated successfully" });
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save department", variant: "destructive" });
+    },
+  });
+
+  const deleteDepartmentMutation = trpc.departments.delete.useMutation({
+    onSuccess: () => {
+      utils.departments.list.invalidate();
+      toast({ title: "Success", description: "Department deleted successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete department", variant: "destructive" });
+    },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
-    try {
-      // Get user's organization
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
-      
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .single();
-      
-      if (!profile?.organization_id) throw new Error('No organization found');
+    const departmentData = {
+      name: formData.name,
+      description: formData.description || undefined,
+      parentId: formData.parentId === 'none' ? undefined : formData.parentId || undefined,
+    };
 
-      const departmentData = {
-        name: formData.name,
-        description: formData.description || null,
-        parent_id: formData.parent_id === 'none' ? null : formData.parent_id || null,
-        head_id: formData.head_id === 'none' ? null : formData.head_id || null,
-        organization_id: profile.organization_id
-      };
-
-      if (editingDepartment) {
-        const { error } = await supabase
-          .from('departments')
-          .update(departmentData)
-          .eq('id', editingDepartment.id);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Department updated successfully"
-        });
-      } else {
-        const { error } = await supabase
-          .from('departments')
-          .insert([departmentData]);
-
-        if (error) throw error;
-        toast({
-          title: "Success",
-          description: "Department created successfully"
-        });
-      }
-
-      setFormData({ name: '', description: '', parent_id: '', head_id: '' });
-      setShowForm(false);
-      setEditingDepartment(null);
-      fetchDepartments();
-    } catch (error) {
-      console.error('Error saving department:', error);
-      toast({
-        title: "Error",
-        description: "Failed to save department",
-        variant: "destructive"
+    if (editingDepartment) {
+      updateDepartment.mutate({
+        id: editingDepartment.id,
+        name: departmentData.name,
+        description: departmentData.description,
       });
-    } finally {
-      setLoading(false);
+    } else {
+      createDepartment.mutate(departmentData);
     }
   };
 
@@ -170,45 +122,24 @@ export const DepartmentManagement: React.FC = () => {
     setFormData({
       name: department.name,
       description: department.description || '',
-      parent_id: department.parent_id || '',
-      head_id: department.head_id || ''
+      parentId: department.parentId || '',
+      headId: department.headId || ''
     });
     setShowForm(true);
   };
 
   const handleDelete = async (departmentId: string) => {
     if (!confirm('Are you sure you want to delete this department?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('departments')
-        .delete()
-        .eq('id', departmentId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "Department deleted successfully"
-      });
-      fetchDepartments();
-    } catch (error) {
-      console.error('Error deleting department:', error);
-      toast({
-        title: "Error",
-        description: "Failed to delete department",
-        variant: "destructive"
-      });
-    }
+    deleteDepartmentMutation.mutate({ id: departmentId });
   };
 
   const resetForm = () => {
-    setFormData({ name: '', description: '', parent_id: '', head_id: '' });
+    setFormData({ name: '', description: '', parentId: '', headId: '' });
     setShowForm(false);
     setEditingDepartment(null);
   };
 
-  const parentDepartments = departments.filter(dept => !dept.parent_id);
+  const parentDepartments = departments.filter(dept => !dept.parentId);
 
   if (loading && departments.length === 0) {
     return <div>Loading departments...</div>;
@@ -223,7 +154,7 @@ export const DepartmentManagement: React.FC = () => {
             Create and manage departments and sub-departments
           </p>
         </div>
-        <Button 
+        <Button
           onClick={() => setShowForm(true)}
           className="flex items-center gap-2"
         >
@@ -264,9 +195,9 @@ export const DepartmentManagement: React.FC = () => {
 
               <div>
                 <Label htmlFor="parent">Parent Department (Optional)</Label>
-                <Select 
-                  value={formData.parent_id} 
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, parent_id: value }))}
+                <Select
+                  value={formData.parentId}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, parentId: value }))}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select parent department" />
@@ -283,10 +214,10 @@ export const DepartmentManagement: React.FC = () => {
               </div>
 
               <div>
-                <Label htmlFor="head_id">Department Head (Optional)</Label>
-                <Select 
-                  value={formData.head_id} 
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, head_id: value }))}
+                <Label htmlFor="headId">Department Head (Optional)</Label>
+                <Select
+                  value={formData.headId}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, headId: value }))}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select department head" />
@@ -295,7 +226,7 @@ export const DepartmentManagement: React.FC = () => {
                     <SelectItem value="none">No Department Head</SelectItem>
                     {profiles.map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
-                        {profile.full_name}
+                        {profile.fullName}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -303,7 +234,7 @@ export const DepartmentManagement: React.FC = () => {
               </div>
 
               <div className="flex gap-2">
-                <Button type="submit" disabled={loading}>
+                <Button type="submit" disabled={createDepartment.isPending || updateDepartment.isPending}>
                   {editingDepartment ? 'Update' : 'Create'} Department
                 </Button>
                 <Button type="button" variant="outline" onClick={resetForm}>
@@ -325,21 +256,21 @@ export const DepartmentManagement: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="font-semibold">{department.name}</h4>
-                      {department.department_head && (
+                      {department.departmentHead && (
                         <Crown className="h-4 w-4 text-yellow-500" />
                       )}
                     </div>
                     {department.description && (
                       <p className="text-sm text-muted-foreground">{department.description}</p>
                     )}
-                    {department.parent_department && (
+                    {department.parentDepartment && (
                       <p className="text-xs text-muted-foreground">
-                        Sub-department of: {department.parent_department.name}
+                        Sub-department of: {department.parentDepartment.name}
                       </p>
                     )}
-                    {department.department_head && (
+                    {department.departmentHead && (
                       <p className="text-xs text-muted-foreground">
-                        Department Head: {department.department_head.full_name}
+                        Department Head: {department.departmentHead.fullName}
                       </p>
                     )}
                   </div>

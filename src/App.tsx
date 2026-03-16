@@ -1,13 +1,16 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { OrganizationProvider } from "@/hooks/useOrganization";
+import { trpc, trpcClient, queryClient } from "@/lib/trpc";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
+import SetupWizard from "./pages/SetupWizard";
 import { AuthPage } from "@/components/auth/AuthPage";
 import { InvitationAcceptance } from "@/components/org/InvitationAcceptance";
 import { UserSettingsPage } from "./pages/UserSettingsPage";
@@ -54,74 +57,78 @@ import SSOPage from "./pages/SSOPage";
 // Feedback page
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 
-const queryClient = new QueryClient();
-
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <OrganizationProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/sso" element={<SSOPage />} />
-              
-              {/* Me section routes */}
-              <Route path="/me/performance" element={<MePerformancePage />} />
-              <Route path="/me/bounties" element={<MeIncentivesPage />} />
-              <Route path="/me/incentives" element={<MeIncentivesPage />} />
-              <Route path="/me/promotions" element={<MePromotionsPage />} />
-              
-              {/* Team section routes */}
-              <Route path="/team/trails" element={<ManageReportsPage />} />
-              <Route path="/team/performance" element={<ManagePerformancePage />} />
-              <Route path="/team/bounties" element={<ManageIncentivesPage />} />
-              <Route path="/team/incentives" element={<ManageIncentivesPage />} />
-              <Route path="/team/promotions" element={<ManagePromotionsPage />} />
-              
-              {/* Tasks page */}
-              <Route path="/tasks" element={<TasksPage />} />
+  <trpc.Provider client={trpcClient} queryClient={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <OrganizationProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <ErrorBoundary>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/setup" element={<SetupWizard />} />
+                <Route path="/" element={<Index />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/sso" element={<SSOPage />} />
 
-              {/* Org section routes - resources */}
-              <Route path="/tools" element={<ManageToolsPage />} />
-              <Route path="/meetings" element={<ManageMeetingsPage />} />
-              <Route path="/sops" element={<ManageSOPsPage />} />
-              <Route path="/measurables" element={<ManageMeasurablesPage />} />
-              <Route path="/agents" element={<ManageAgentsPage />} />
-              <Route path="/agents/:agentId/chat" element={<AgentChatPage />} />
-              
-              {/* Org section routes */}
-              <Route path="/departments" element={<DepartmentsPage />} />
-              <Route path="/functions" element={<FunctionsPage />} />
-              <Route path="/directory" element={<OrgChartPage />} />
-              <Route path="/hierarchy" element={<OrgChartPage />} />
-              <Route path="/holiday-calendar" element={<HolidayCalendarPage />} />
-              <Route path="/core-values" element={<CoreValuesPage />} />
-              <Route path="/academy" element={<AcademyPage />} />
-              
-              {/* Other routes */}
-              <Route path="/auth" element={<AuthPage />} />
-              <Route path="/accept-invite" element={<AcceptInvitePage />} />
-              <Route path="/accept-invitation" element={<InvitationAcceptance />} />
-              <Route path="/settings" element={<UserSettingsPage />} />
-              <Route path="/org" element={<AdminSettingsPage />} />
-              <Route path="/admin" element={<AdminSettingsPage />} /> {/* Redirect for old URL */}
-              <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/journey/:employeeId" element={<EmployeeJourneyPage />} />
-              <Route path="/department/:id" element={<DepartmentPage />} />
-              <Route path="/function/:id" element={<TeamPage />} />
-              
-              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </BrowserRouter>
-        </TooltipProvider>
-      </OrganizationProvider>
-    </AuthProvider>
-  </QueryClientProvider>
+                {/* Me section routes */}
+                <Route path="/me/performance" element={<MePerformancePage />} />
+                <Route path="/me/bounties" element={<MeIncentivesPage />} />
+                <Route path="/me/incentives" element={<MeIncentivesPage />} />
+                <Route path="/me/promotions" element={<MePromotionsPage />} />
+
+                {/* Team section routes */}
+                <Route path="/team/trails" element={<ManageReportsPage />} />
+                <Route path="/team/performance" element={<ManagePerformancePage />} />
+                <Route path="/team/bounties" element={<ManageIncentivesPage />} />
+                <Route path="/team/incentives" element={<ManageIncentivesPage />} />
+                <Route path="/team/promotions" element={<ManagePromotionsPage />} />
+
+                {/* Tasks page */}
+                <Route path="/tasks" element={<TasksPage />} />
+
+                {/* Org section routes - resources */}
+                <Route path="/tools" element={<ManageToolsPage />} />
+                <Route path="/meetings" element={<ManageMeetingsPage />} />
+                <Route path="/sops" element={<ManageSOPsPage />} />
+                <Route path="/measurables" element={<ManageMeasurablesPage />} />
+                <Route path="/agents" element={<ManageAgentsPage />} />
+                <Route path="/agents/:agentId/chat" element={<AgentChatPage />} />
+
+                {/* Org section routes */}
+                <Route path="/departments" element={<DepartmentsPage />} />
+                <Route path="/functions" element={<FunctionsPage />} />
+                <Route path="/directory" element={<OrgChartPage />} />
+                <Route path="/hierarchy" element={<OrgChartPage />} />
+                <Route path="/holiday-calendar" element={<HolidayCalendarPage />} />
+                <Route path="/core-values" element={<CoreValuesPage />} />
+                <Route path="/academy" element={<AcademyPage />} />
+
+                {/* Other routes */}
+                <Route path="/auth" element={<AuthPage />} />
+                <Route path="/accept-invite" element={<AcceptInvitePage />} />
+                <Route path="/accept-invitation" element={<InvitationAcceptance />} />
+                <Route path="/invite/:token" element={<AcceptInvitePage />} />
+                <Route path="/settings" element={<UserSettingsPage />} />
+                <Route path="/org" element={<AdminSettingsPage />} />
+                <Route path="/admin" element={<AdminSettingsPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
+                <Route path="/journey/:employeeId" element={<EmployeeJourneyPage />} />
+                <Route path="/department/:id" element={<DepartmentPage />} />
+                <Route path="/function/:id" element={<TeamPage />} />
+
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </BrowserRouter>
+            </ErrorBoundary>
+          </TooltipProvider>
+        </OrganizationProvider>
+      </AuthProvider>
+    </QueryClientProvider>
+  </trpc.Provider>
 );
 
 export default App;

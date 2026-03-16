@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -7,9 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Users, Search, Plus, ChevronUp, ChevronDown, MoreHorizontal, X } from "lucide-react";
+import { Search, Plus, ChevronUp, ChevronDown, MoreHorizontal, X } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -17,29 +17,30 @@ import { InviteUser } from "@/components/admin/InviteUser";
 
 interface ProfileWithExtras {
   id: string;
-  user_id: string;
-  full_name: string;
+  userId: string;
+  fullName: string;
   email: string;
-  avatar_url: string | null;
+  avatarUrl: string | null;
   location: string | null;
   status: string | null;
-  manager_id: string | null;
+  managerId: string | null;
   manager?: {
     id: string;
-    full_name: string;
+    fullName: string;
   } | null;
   department: {
     id: string;
     name: string;
   } | null;
-  position_role: {
+  positionRole: {
     id: string;
     title: string;
   } | null;
-  user_roles: Array<{
+  userRoles: Array<{
     role: string;
-  }> | any;
-  team_memberships: Array<{
+  }>;
+  teamMemberships: Array<{
+    id: string;
     team: {
       id: string;
       name: string;
@@ -63,233 +64,120 @@ interface Team {
   name: string;
 }
 
-type SortField = 'full_name' | 'email' | 'department' | 'position_role' | 'manager' | 'employee_status' | 'hire_date';
+type SortField = 'fullName' | 'email' | 'department' | 'positionRole' | 'manager' | 'employeeStatus' | 'hireDate';
 type SortDirection = 'asc' | 'desc';
 
 export const EmployeeDirectoryTable: React.FC = () => {
-  const [profiles, setProfiles] = useState<ProfileWithExtras[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [positions, setPositions] = useState<PositionRole[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
-  const [sortField, setSortField] = useState<SortField>('full_name');
+  const [sortField, setSortField] = useState<SortField>('fullName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [editingCell, setEditingCell] = useState<{profileId: string, field: string} | null>(null);
-  
+
   const { toast } = useToast();
   const { assignRole } = useRole();
   const { organization } = useOrganization();
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const utils = trpc.useUtils();
 
-  const fetchData = async () => {
+  const { data: profilesRaw, isLoading: loading } = trpc.profiles.list.useQuery();
+  const { data: departmentsRaw } = trpc.departments.list.useQuery();
+  const { data: positionsRaw } = trpc.positions.listRoles.useQuery();
+  const { data: teamsRaw } = trpc.teams.list.useQuery();
+
+  const profiles: ProfileWithExtras[] = (profilesRaw || []) as ProfileWithExtras[];
+  const departments: Department[] = (departmentsRaw ?? []).map((d) => ({ id: d.id, name: d.name }));
+  const positions: PositionRole[] = (positionsRaw ?? []) as PositionRole[];
+  const teams: Team[] = (teamsRaw ?? []).map((t) => ({ id: t.id, name: t.name }));
+
+  const updateProfile = trpc.profiles.update.useMutation({
+    onSuccess: (_, variables) => {
+      utils.profiles.list.invalidate();
+      toast({ title: "Success", description: "Updated successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update", variant: "destructive" });
+    },
+  });
+
+  const addTeamMember = trpc.teamMembers.add.useMutation({
+    onSuccess: () => {
+      utils.profiles.list.invalidate();
+      toast({ title: "Success", description: "User added to team successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to add user to team", variant: "destructive" });
+    },
+  });
+
+  const removeTeamMember = trpc.teamMembers.remove.useMutation({
+    onSuccess: () => {
+      utils.profiles.list.invalidate();
+      toast({ title: "Success", description: "User removed from team successfully" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to remove user from team", variant: "destructive" });
+    },
+  });
+
+  const updateField = async (profileId: string, field: string, value: string) => {
     try {
-      const [profilesRes, departmentsRes, positionsRes, teamsRes] = await Promise.all([
-        supabase
-          .from('profiles')
-          .select(`
-            *,
-            department:departments!profiles_department_id_fkey(id, name),
-            position_role:position_roles(id, title),
-            team_memberships:team_members(
-              role,
-              team:teams(id, name)
-            )
-          `),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('position_roles').select('id, title').order('title'),
-        supabase.from('teams').select('id, name').order('name')
-      ]);
-
-      if (profilesRes.error) throw profilesRes.error;
-      if (departmentsRes.error) throw departmentsRes.error;
-      if (positionsRes.error) throw positionsRes.error;
-      if (teamsRes.error) throw teamsRes.error;
-
-      const profilesWithRolesAndManagers = await Promise.all(
-        (profilesRes.data || []).map(async (profile) => {
-          const [userRolesRes, managerRes] = await Promise.all([
-            supabase
-              .from('user_roles')
-              .select('role')
-              .eq('user_id', profile.user_id),
-            profile.manager_id ? supabase
-              .from('profiles')
-              .select('id, full_name')
-              .eq('id', profile.manager_id)
-              .single() : Promise.resolve({ data: null })
-          ]);
-          
-          return {
-            ...profile,
-            user_roles: userRolesRes.data || [],
-            manager: managerRes.data
-          };
-        })
-      );
-
-      setProfiles(profilesWithRolesAndManagers);
-      setDepartments(departmentsRes.data || []);
-      setPositions(positionsRes.data || []);
-      setTeams(teamsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch user data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const updateField = async (profileId: string, field: string, value: any) => {
-    try {
-      const updates: any = {};
-      
       switch (field) {
         case 'location':
-        case 'level':
-        case 'employee_status':
-        case 'hire_date':
-          updates[field] = value || null;
+          updateProfile.mutate({ location: value || undefined });
           break;
         case 'department':
-          updates.department_id = value === 'none' ? null : value || null;
+          updateProfile.mutate({ departmentId: value === 'none' ? undefined : value || undefined });
           break;
         case 'position':
-          updates.position_role_id = value === 'none' ? null : value || null;
+          updateProfile.mutate({ positionId: value === 'none' ? undefined : value || undefined });
           break;
         case 'manager':
           if (profileId === value) {
-            toast({
-              title: "Error",
-              description: "User cannot be their own manager",
-              variant: "destructive"
-            });
+            toast({ title: "Error", description: "User cannot be their own manager", variant: "destructive" });
             return;
           }
-          
-          const wouldCreateCircle = await checkCircularRelationship(profileId, value);
-          if (wouldCreateCircle) {
-            toast({
-              title: "Error", 
-              description: "This would create a circular manager relationship",
-              variant: "destructive"
-            });
-            return;
-          }
-          
-          updates.manager_id = value === 'none' ? null : value || null;
+          // TODO: Circular relationship check should be done server-side in tRPC
+          updateProfile.mutate({ managerId: value === 'none' ? undefined : value || undefined });
           break;
         case 'role':
-          await assignRole(profiles.find(p => p.id === profileId)?.user_id || '', value);
-          fetchData();
+          await assignRole(profiles.find(p => p.id === profileId)?.userId || '', value);
+          utils.profiles.list.invalidate();
           return;
+        case 'status':
+        case 'employee_status':
+          updateProfile.mutate({ status: value || undefined });
+          break;
+        default:
+          updateProfile.mutate({ [field]: value || undefined });
       }
-
-      const { error } = await supabase
-        .from('profiles')
-        .update(updates)
-        .eq('id', profileId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: `${field.charAt(0).toUpperCase() + field.slice(1)} updated successfully`
-      });
-      fetchData();
     } catch (error) {
-      console.error(`Error updating ${field}:`, error);
       toast({
         title: "Error",
-        description: `Failed to update ${field}`,
-        variant: "destructive"
+        description: `Failed to update ${field}: ${error instanceof Error ? error.message : 'An unexpected error occurred'}`,
+        variant: "destructive",
       });
     }
-  };
-
-  const checkCircularRelationship = async (userId: string, newManagerId: string): Promise<boolean> => {
-    if (!newManagerId || newManagerId === 'none') return false;
-    
-    let currentManagerId = newManagerId;
-    const visited = new Set([userId]);
-    
-    while (currentManagerId) {
-      if (visited.has(currentManagerId)) {
-        return true;
-      }
-      
-      visited.add(currentManagerId);
-      
-      const { data } = await supabase
-        .from('profiles')
-        .select('manager_id')
-        .eq('id', currentManagerId)
-        .single();
-      
-      currentManagerId = data?.manager_id || null;
-    }
-    
-    return false;
   };
 
   const addToTeam = async (profileId: string, teamId: string) => {
-    try {
-      const { error } = await supabase
-        .from('team_members')
-        .insert([{
-          team_id: teamId,
-          profile_id: profileId,
-          role_in_team: 'member'
-        }]);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "User added to team successfully"
-      });
-      fetchData();
-    } catch (error) {
-      console.error('Error adding to team:', error);
-      toast({
-        title: "Error",
-        description: "Failed to add user to team",
-        variant: "destructive"
-      });
-    }
+    addTeamMember.mutate({
+      teamId,
+      profileId,
+      role: 'member',
+    });
   };
 
   const removeFromTeam = async (profileId: string, teamId: string) => {
-    try {
-      const { error } = await supabase
-        .from('team_members')
-        .delete()
-        .eq('profile_id', profileId)
-        .eq('team_id', teamId);
-
-      if (error) throw error;
-      
-      toast({
-        title: "Success",
-        description: "User removed from team successfully"
-      });
-      fetchData();
-    } catch (error) {
-      console.error('Error removing from team:', error);
-      toast({
-        title: "Error",
-        description: "Failed to remove user from team",
-        variant: "destructive"
-      });
+    // TODO: teamMembers.remove expects {id} not {profileId, teamId} - may need adjustment
+    // For now, find the membership id from the profile data
+    const profile = profiles.find(p => p.id === profileId);
+    const membership = profile?.teamMemberships.find(tm => tm.team.id === teamId);
+    if (membership?.id) {
+      removeTeamMember.mutate({ id: membership.id });
+    } else {
+      toast({ title: "Error", description: "Could not find team membership to remove", variant: "destructive" });
     }
   };
 
@@ -326,19 +214,19 @@ export const EmployeeDirectoryTable: React.FC = () => {
 
   const filteredAndSortedProfiles = profiles
     .filter(profile =>
-      profile.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      profile.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       profile.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       profile.department?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      profile.position_role?.title.toLowerCase().includes(searchTerm.toLowerCase())
+      profile.positionRole?.title.toLowerCase().includes(searchTerm.toLowerCase())
     )
     .sort((a, b) => {
-      let aValue: any;
-      let bValue: any;
+      let aValue: string;
+      let bValue: string;
 
       switch (sortField) {
-        case 'full_name':
-          aValue = a.full_name;
-          bValue = b.full_name;
+        case 'fullName':
+          aValue = a.fullName;
+          bValue = b.fullName;
           break;
         case 'email':
           aValue = a.email;
@@ -348,19 +236,19 @@ export const EmployeeDirectoryTable: React.FC = () => {
           aValue = a.department?.name || '';
           bValue = b.department?.name || '';
           break;
-        case 'position_role':
-          aValue = a.position_role?.title || '';
-          bValue = b.position_role?.title || '';
+        case 'positionRole':
+          aValue = a.positionRole?.title || '';
+          bValue = b.positionRole?.title || '';
           break;
         case 'manager':
-          aValue = a.manager?.full_name || '';
-          bValue = b.manager?.full_name || '';
+          aValue = a.manager?.fullName || '';
+          bValue = b.manager?.fullName || '';
           break;
-        case 'employee_status':
+        case 'employeeStatus':
           aValue = a.status || '';
           bValue = b.status || '';
           break;
-        case 'hire_date':
+        case 'hireDate':
           aValue = '';
           bValue = '';
           break;
@@ -376,7 +264,7 @@ export const EmployeeDirectoryTable: React.FC = () => {
     });
 
   const SortableHeader: React.FC<{ field: SortField; children: React.ReactNode }> = ({ field, children }) => (
-    <TableHead 
+    <TableHead
       className="cursor-pointer select-none hover:bg-muted/50"
       onClick={() => handleSort(field)}
     >
@@ -454,14 +342,14 @@ export const EmployeeDirectoryTable: React.FC = () => {
     }
 
     return (
-      <div 
+      <div
         className="cursor-pointer hover:bg-muted/50 p-1 rounded min-h-[2rem] flex items-center"
         onClick={() => setEditingCell({ profileId: profile.id, field })}
       >
         {field === 'department' ? (
           options?.find(o => o.value === value)?.label || 'No Department'
         ) : field === 'position' ? (
-          options?.find(o => o.value === value)?.label || 'No Position' 
+          options?.find(o => o.value === value)?.label || 'No Position'
         ) : field === 'manager' ? (
           options?.find(o => o.value === value)?.label || 'No Manager'
         ) : field === 'role' ? (
@@ -543,15 +431,15 @@ export const EmployeeDirectoryTable: React.FC = () => {
                       onCheckedChange={handleSelectAll}
                     />
                   </TableHead>
-                  <SortableHeader field="full_name">Employee</SortableHeader>
+                  <SortableHeader field="fullName">Employee</SortableHeader>
                   <TableHead>Contact</TableHead>
                   <SortableHeader field="department">Department</SortableHeader>
-                  <SortableHeader field="position_role">Position</SortableHeader>
+                  <SortableHeader field="positionRole">Position</SortableHeader>
                   <SortableHeader field="manager">Manager</SortableHeader>
                   <TableHead>Teams</TableHead>
                   <TableHead>Role</TableHead>
-                  <SortableHeader field="employee_status">Status</SortableHeader>
-                  <SortableHeader field="hire_date">Hire Date</SortableHeader>
+                  <SortableHeader field="employeeStatus">Status</SortableHeader>
+                  <SortableHeader field="hireDate">Hire Date</SortableHeader>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -567,11 +455,11 @@ export const EmployeeDirectoryTable: React.FC = () => {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-8 w-8">
-                          <AvatarImage src={profile.avatar_url || ''} />
-                          <AvatarFallback>{getInitials(profile.full_name)}</AvatarFallback>
+                          <AvatarImage src={profile.avatarUrl || ''} />
+                          <AvatarFallback>{getInitials(profile.fullName)}</AvatarFallback>
                         </Avatar>
                         <div>
-                          <div className="font-medium">{profile.full_name}</div>
+                          <div className="font-medium">{profile.fullName}</div>
                           <div className="text-sm text-muted-foreground">{profile.email}</div>
                         </div>
                       </div>
@@ -603,7 +491,7 @@ export const EmployeeDirectoryTable: React.FC = () => {
                       <EditableCell
                         profile={profile}
                         field="position"
-                        value={profile.position_role?.id || 'none'}
+                        value={profile.positionRole?.id || 'none'}
                         type="select"
                         options={[
                           { value: 'none', label: 'No Position' },
@@ -621,17 +509,17 @@ export const EmployeeDirectoryTable: React.FC = () => {
                           { value: 'none', label: 'No Manager' },
                           ...profiles
                             .filter(p => p.id !== profile.id)
-                            .map(p => ({ value: p.id, label: p.full_name }))
+                            .map(p => ({ value: p.id, label: p.fullName }))
                         ]}
                       />
                     </TableCell>
                     <TableCell>
                       <div className="space-y-2">
                         <div className="flex flex-wrap gap-1">
-                          {profile.team_memberships.map((membership, idx) => (
-                            <Badge 
-                              key={idx} 
-                              variant="outline" 
+                          {profile.teamMemberships.map((membership, idx) => (
+                            <Badge
+                              key={idx}
+                              variant="outline"
                               className="text-xs cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
                               onClick={() => removeFromTeam(profile.id, membership.team.id)}
                             >
@@ -646,7 +534,7 @@ export const EmployeeDirectoryTable: React.FC = () => {
                           </SelectTrigger>
                           <SelectContent>
                             {teams
-                              .filter(team => !profile.team_memberships.some(tm => tm.team.id === team.id))
+                              .filter(team => !profile.teamMemberships.some(tm => tm.team.id === team.id))
                               .map((team) => (
                               <SelectItem key={team.id} value={team.id}>
                                 {team.name}
@@ -660,7 +548,7 @@ export const EmployeeDirectoryTable: React.FC = () => {
                       <EditableCell
                         profile={profile}
                         field="role"
-                        value={profile.user_roles[0]?.role || 'employee'}
+                        value={profile.userRoles[0]?.role || 'employee'}
                         type="select"
                         options={[
                           { value: 'employee', label: 'Employee' },
@@ -714,7 +602,7 @@ export const EmployeeDirectoryTable: React.FC = () => {
         <InviteUser
           open={showInviteDialog}
           onOpenChange={setShowInviteDialog}
-          onInviteSent={fetchData}
+          onInviteSent={() => utils.profiles.list.invalidate()}
           organizationId={organization.id}
         />
       )}

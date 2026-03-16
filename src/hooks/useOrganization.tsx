@@ -1,14 +1,21 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { trpc } from '@/lib/trpc';
 
 interface Organization {
   id: string;
   name: string;
   slug: string;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  primaryColor?: string | null;
+  accentColor?: string | null;
+  logoUrl?: string | null;
+  // Keep snake_case aliases for backward compat with existing components
+  created_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
   primary_color?: string | null;
   accent_color?: string | null;
   logo_url?: string | null;
@@ -35,61 +42,53 @@ interface OrganizationProviderProps {
 }
 
 export const OrganizationProvider = ({ children }: OrganizationProviderProps) => {
+  const { user } = useAuth();
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
-  const { user } = useAuth();
 
-  const fetchOrganization = async () => {
+  const orgQuery = trpc.org.get.useQuery(undefined, {
+    enabled: !!user,
+    retry: false,
+  });
+
+  useEffect(() => {
     if (!user) {
       setOrganization(null);
       setLoading(false);
       return;
     }
 
-    try {
-      // First get the user's profile to find their organization
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (profileError) throw profileError;
-
-      if (!profile?.organization_id) {
-        setOrganization(null);
-        setLoading(false);
-        return;
-      }
-
-      // Then fetch the organization details
-      const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .select('*')
-        .eq('id', profile.organization_id)
-        .single();
-
-      if (orgError) throw orgError;
-
-      setOrganization(org);
-    } catch (error) {
-      console.error('Error fetching organization:', error);
-      setOrganization(null);
-    } finally {
-      setLoading(false);
+    if (orgQuery.isLoading) {
+      setLoading(true);
+      return;
     }
-  };
 
-  useEffect(() => {
-    // Reset loading state when user changes to prevent flash of org setup
-    setLoading(true);
-    fetchOrganization();
-  }, [user]);
+    if (orgQuery.data) {
+      const org = orgQuery.data;
+      setOrganization({
+        ...org,
+        // Snake_case aliases for backward compatibility
+        created_by: org.createdBy,
+        created_at: org.createdAt?.toISOString?.() ?? String(org.createdAt),
+        updated_at: org.updatedAt?.toISOString?.() ?? String(org.updatedAt),
+        primary_color: org.primaryColor,
+        accent_color: org.accentColor,
+        logo_url: org.logoUrl,
+      } as Organization);
+    } else {
+      setOrganization(null);
+    }
+    setLoading(false);
+  }, [user, orgQuery.data, orgQuery.isLoading]);
+
+  const refetch = async () => {
+    await orgQuery.refetch();
+  };
 
   const value = {
     organization,
     loading,
-    refetch: fetchOrganization,
+    refetch,
   };
 
   return (

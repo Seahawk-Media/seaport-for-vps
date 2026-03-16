@@ -9,7 +9,7 @@ import { DepartmentWorkspace } from '@/components/department/DepartmentWorkspace
 import { Spinner } from '@/components/ui/spinner';
 import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 interface Department {
@@ -23,66 +23,38 @@ const Dashboard = () => {
   const { isSuperAdmin, isAdmin, loading: roleLoading } = useRole();
   const navigate = useNavigate();
 
-  const [departments, setDepartments] = useState<Department[]>([]);
   const [activeDeptIndex, setActiveDeptIndex] = useState(0);
-  const [loadingDepts, setLoadingDepts] = useState(true);
 
   // Auth guard
   useEffect(() => {
     if (!loading && !user) navigate('/auth');
   }, [user, loading, navigate]);
 
-  // Redirect if pending invitation
-  useEffect(() => {
-    const check = async () => {
-      if (loading || orgLoading || organization) return;
-      if (!user) return;
-      const { data } = await supabase
-        .from('invitations')
-        .select('id')
-        .is('accepted_at', null)
-        .gt('expires_at', new Date().toISOString())
-        .limit(1);
-      if (data?.length) navigate(`/accept-invitation?invitation=${data[0].id}`);
-    };
-    check();
-  }, [loading, orgLoading, user, organization, navigate]);
+  const canSeeAll = !roleLoading && (isSuperAdmin() || isAdmin());
 
-  // Load departments scoped to this user's access
-  useEffect(() => {
-    if (organization?.id && !roleLoading) fetchDepartments();
-  }, [organization?.id, roleLoading]);
+  // Load departments via tRPC
+  const { data: allDepartments, isLoading: loadingAllDepts } = trpc.departments.list.useQuery(undefined, {
+    enabled: !!organization?.id && !roleLoading && canSeeAll,
+  });
 
-  const fetchDepartments = async () => {
-    try {
-      const canSeeAll = isSuperAdmin() || isAdmin();
+  // Load current user's profile for non-admin users
+  const { data: myProfile, isLoading: loadingMyProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!organization?.id && !roleLoading && !canSeeAll,
+  });
 
-      if (canSeeAll) {
-        const { data } = await supabase
-          .from('departments')
-          .select('id, name')
-          .order('name');
-        setDepartments(data || []);
-      } else {
-        // Only the user's own department
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('department_id, departments:department_id(id, name)')
-          .eq('user_id', user!.id)
-          .single();
+  // For non-admin: get their department
+  const { data: myDepartment, isLoading: loadingMyDept } = trpc.departments.get.useQuery(
+    { id: myProfile?.departmentId ?? '' },
+    { enabled: !!myProfile?.departmentId && !canSeeAll },
+  );
 
-        if (profile?.departments) {
-          setDepartments([profile.departments as any]);
-        } else {
-          setDepartments([]);
-        }
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingDepts(false);
-    }
-  };
+  const loadingDepts = canSeeAll ? loadingAllDepts : (loadingMyProfile || loadingMyDept);
+
+  const departments: Department[] = canSeeAll
+    ? (allDepartments ?? []).map(d => ({ id: d.id, name: d.name }))
+    : myDepartment
+      ? [{ id: myDepartment.id, name: myDepartment.name }]
+      : [];
 
   // ── Loading / org setup ────────────────────────────────────────────────────
 

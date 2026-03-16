@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, ExternalLink, Wrench, Edit, Trash2, Search, Building, Users } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -29,9 +29,9 @@ interface Tool {
   description: string | null;
   url: string | null;
   icon: string | null;
-  team_id: string | null;
-  department_id: string | null;
-  team?: { id: string; name: string; department_id: string | null } | null;
+  teamId: string | null;
+  departmentId: string | null;
+  team?: { id: string; name: string; departmentId: string | null } | null;
 }
 
 interface Department {
@@ -42,17 +42,13 @@ interface Department {
 interface Team {
   id: string;
   name: string;
-  department_id: string | null;
+  departmentId: string | null;
 }
 
 export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAllFunctions = false, showDeptAll = false }) => {
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
-  const [formData, setFormData] = useState({ name: '', description: '', url: '', team_id: '' });
+  const [formData, setFormData] = useState({ name: '', description: '', url: '', teamId: '' });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
   const [filterFunction, setFilterFunction] = useState('all');
@@ -61,113 +57,102 @@ export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAl
   const { organization } = useOrganization();
 
   const canManage = isAdmin() || isSuperAdmin() || isManager();
+  const utils = trpc.useUtils();
 
-  useEffect(() => {
-    fetchData();
-  }, [departmentId, teamId, showAllFunctions, showDeptAll]);
+  const toolsQuery = trpc.tools.list.useQuery();
+  const departmentsQuery = trpc.departments.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
 
-  const fetchData = async () => {
-    try {
-      let query = supabase.from('tools').select('*, team:teams(id, name, department_id)');
-      
-      if (showAllFunctions) {
-        // Show all tools across all functions - no filter
-      } else if (teamId) {
-        query = query.eq('team_id', teamId);
-      } else if (showDeptAll && departmentId) {
-        // Department master list: all tools where department_id matches (incl. function-level)
-        query = query.eq('department_id', departmentId);
-      } else if (departmentId) {
-        query = query.eq('department_id', departmentId).is('team_id', null);
-      }
+  const createMutation = trpc.tools.create.useMutation({
+    onSuccess: () => {
+      toast({ title: "Tool added" });
+      setDialogOpen(false);
+      setEditingTool(null);
+      setFormData({ name: '', description: '', url: '', teamId: '' });
+      utils.tools.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      const [toolsRes, deptRes, teamsRes] = await Promise.all([
-        query.order('name'),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('teams').select('id, name, department_id').order('name')
-      ]);
+  const updateMutation = trpc.tools.update.useMutation({
+    onSuccess: () => {
+      toast({ title: "Tool updated" });
+      setDialogOpen(false);
+      setEditingTool(null);
+      setFormData({ name: '', description: '', url: '', teamId: '' });
+      utils.tools.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      if (toolsRes.error) throw toolsRes.error;
-      setTools(toolsRes.data || []);
-      setDepartments(deptRes.data || []);
-      setTeams(teamsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching tools:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const deleteMutation = trpc.tools.delete.useMutation({
+    onSuccess: () => {
+      toast({ title: "Tool deleted" });
+      utils.tools.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const allTools = (toolsQuery.data || []) as Tool[];
+  const departments = (departmentsQuery.data || []) as Department[];
+  const teams = (teamsQuery.data || []) as Team[];
+  const loading = toolsQuery.isLoading;
+
+  // Filter tools based on scope
+  const tools = allTools.filter(tool => {
+    if (showAllFunctions) return true;
+    if (teamId) return tool.teamId === teamId;
+    if (showDeptAll && departmentId) return tool.departmentId === departmentId;
+    if (departmentId) return tool.departmentId === departmentId && !tool.teamId;
+    return true;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization) return;
 
-    // Require function selection when in global view
-    if (showAllFunctions && !formData.team_id) {
+    if (showAllFunctions && !formData.teamId) {
       toast({ title: "Error", description: "Please select a function", variant: "destructive" });
       return;
     }
 
-    const selectedTeam = teams.find(t => t.id === formData.team_id);
+    const selectedTeam = teams.find(t => t.id === formData.teamId);
 
-    try {
-      if (editingTool) {
-        const { error } = await supabase
-          .from('tools')
-          .update({
-            name: formData.name,
-            description: formData.description || null,
-            url: formData.url || null,
-            team_id: formData.team_id || null,
-            department_id: selectedTeam?.department_id || null,
-          })
-          .eq('id', editingTool.id);
-
-        if (error) throw error;
-        toast({ title: "Tool updated" });
-      } else {
-        const { error } = await supabase
-          .from('tools')
-          .insert({
-            name: formData.name,
-            description: formData.description || null,
-            url: formData.url || null,
-            organization_id: organization.id,
-            department_id: showAllFunctions ? (selectedTeam?.department_id || null) : (departmentId || null),
-            team_id: showAllFunctions ? (formData.team_id || null) : (teamId || null),
-          });
-
-        if (error) throw error;
-        toast({ title: "Tool added" });
-      }
-
-      setDialogOpen(false);
-      setEditingTool(null);
-      setFormData({ name: '', description: '', url: '', team_id: '' });
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+    if (editingTool) {
+      updateMutation.mutate({
+        id: editingTool.id,
+        name: formData.name,
+        description: formData.description || undefined,
+        url: formData.url || undefined,
+      });
+    } else {
+      createMutation.mutate({
+        name: formData.name,
+        description: formData.description || undefined,
+        url: formData.url || undefined,
+        departmentId: showAllFunctions ? (selectedTeam?.departmentId || undefined) : (departmentId || undefined),
+        teamId: showAllFunctions ? (formData.teamId || undefined) : (teamId || undefined),
+      });
     }
   };
 
-  const handleDelete = async (id: string) => {
-    try {
-      const { error } = await supabase.from('tools').delete().eq('id', id);
-      if (error) throw error;
-      toast({ title: "Tool deleted" });
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate({ id });
   };
 
   const openEdit = (tool: Tool) => {
     setEditingTool(tool);
-    setFormData({ 
-      name: tool.name, 
-      description: tool.description || '', 
+    setFormData({
+      name: tool.name,
+      description: tool.description || '',
       url: tool.url || '',
-      team_id: tool.team_id || ''
+      teamId: tool.teamId || ''
     });
     setDialogOpen(true);
   };
@@ -175,17 +160,17 @@ export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAl
   const filteredTools = tools.filter(tool => {
     const matchesSearch = tool.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (tool.description?.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const toolDeptId = tool.team?.department_id || tool.department_id;
+
+    const toolDeptId = tool.team?.departmentId || tool.departmentId;
     const matchesDept = filterDepartment === 'all' || toolDeptId === filterDepartment;
-    const matchesFunc = filterFunction === 'all' || tool.team_id === filterFunction;
-    
+    const matchesFunc = filterFunction === 'all' || tool.teamId === filterFunction;
+
     return matchesSearch && matchesDept && matchesFunc;
   });
 
-  const filteredTeams = filterDepartment === 'all' 
-    ? teams 
-    : teams.filter(t => t.department_id === filterDepartment);
+  const filteredTeams = filterDepartment === 'all'
+    ? teams
+    : teams.filter(t => t.departmentId === filterDepartment);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-muted-foreground">Loading tools...</div>;
@@ -203,7 +188,7 @@ export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAl
             setDialogOpen(open);
             if (!open) {
               setEditingTool(null);
-              setFormData({ name: '', description: '', url: '', team_id: '' });
+              setFormData({ name: '', description: '', url: '', teamId: '' });
             }
           }}>
             <DialogTrigger asChild>
@@ -220,13 +205,13 @@ export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAl
                 {(showAllFunctions || editingTool) && (
                   <div className="space-y-2">
                     <Label>Function *</Label>
-                    <Select value={formData.team_id} onValueChange={(v) => setFormData({ ...formData, team_id: v })}>
+                    <Select value={formData.teamId} onValueChange={(v) => setFormData({ ...formData, teamId: v })}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select function" />
                       </SelectTrigger>
                       <SelectContent>
                         {teams.map(team => {
-                          const dept = departments.find(d => d.id === team.department_id);
+                          const dept = departments.find(d => d.id === team.departmentId);
                           return (
                             <SelectItem key={team.id} value={team.id}>
                               {team.name} {dept && <span className="text-muted-foreground">({dept.name})</span>}
@@ -321,7 +306,7 @@ export const ToolsTab: React.FC<ToolsTabProps> = ({ departmentId, teamId, showAl
             </TableHeader>
             <TableBody>
               {filteredTools.map((tool) => {
-                const dept = departments.find(d => d.id === (tool.team?.department_id || tool.department_id));
+                const dept = departments.find(d => d.id === (tool.team?.departmentId || tool.departmentId));
                 return (
                   <TableRow key={tool.id}>
                     <TableCell className="font-medium">

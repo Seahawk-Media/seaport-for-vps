@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
 import { User, Settings, LogOut, Bookmark, Building2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -12,12 +11,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-
-interface UserProfile {
-  id: string;
-  full_name: string;
-  avatar_url?: string;
-}
 
 interface UserProfileDropdownProps {
   onMyJourneyClick: () => void;
@@ -34,27 +27,13 @@ export const UserProfileDropdown = ({
 }: UserProfileDropdownProps) => {
   const { user } = useAuth();
   const { isAdmin, isSuperAdmin } = useRole();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
 
-  useEffect(() => {
-    if (user) {
-      fetchProfile();
-    }
-  }, [user]);
+  const meQuery = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+    retry: false,
+  });
 
-  const fetchProfile = async () => {
-    if (!user) return;
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id, full_name, avatar_url')
-      .eq('user_id', user.id)
-      .single();
-
-    if (profile) {
-      setProfile(profile);
-    }
-  };
+  const profile = meQuery.data;
 
   const getInitials = (name: string) => {
     return name
@@ -74,9 +53,9 @@ export const UserProfileDropdown = ({
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-2 p-1 rounded-full hover:bg-accent transition-colors">
           <Avatar className="h-8 w-8">
-            <AvatarImage src={profile.avatar_url} alt={profile.full_name} />
+            <AvatarImage src={profile.avatarUrl || undefined} alt={profile.fullName || ''} />
             <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-              {getInitials(profile.full_name)}
+              {getInitials(profile.fullName || user.email || 'U')}
             </AvatarFallback>
           </Avatar>
         </button>
@@ -84,13 +63,13 @@ export const UserProfileDropdown = ({
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel className="flex items-center gap-2">
           <Avatar className="h-6 w-6">
-            <AvatarImage src={profile.avatar_url} alt={profile.full_name} />
+            <AvatarImage src={profile.avatarUrl || undefined} alt={profile.fullName || ''} />
             <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-              {getInitials(profile.full_name)}
+              {getInitials(profile.fullName || user.email || 'U')}
             </AvatarFallback>
           </Avatar>
           <div className="flex flex-col">
-            <span className="font-medium">{profile.full_name}</span>
+            <span className="font-medium">{profile.fullName}</span>
             <span className="text-xs text-muted-foreground">{user.email}</span>
           </div>
         </DropdownMenuLabel>

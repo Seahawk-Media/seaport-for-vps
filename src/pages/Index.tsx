@@ -1,38 +1,43 @@
 import { useEffect, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 
 const Index = () => {
   const { user, loading } = useAuth();
-  const navigate = useNavigate();
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
 
+  // Check if setup is needed
+  const setupQuery = trpc.setup.status.useQuery(undefined, {
+    enabled: !loading,
+    retry: false,
+  });
+
+  const meQuery = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+    retry: false,
+  });
+
   useEffect(() => {
-    const getMyJourneyPath = async () => {
-      if (!user) {
-        setRedirectPath('/auth');
-        return;
-      }
+    if (loading || setupQuery.isLoading) return;
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (profile) {
-        setRedirectPath(`/journey/${profile.id}`);
-      } else {
-        // No profile yet - go to dashboard for org setup
-        setRedirectPath('/dashboard');
-      }
-    };
-
-    if (!loading) {
-      getMyJourneyPath();
+    // If no org exists, redirect to setup wizard
+    if (setupQuery.data?.needsSetup) {
+      setRedirectPath('/setup');
+      return;
     }
-  }, [user, loading]);
+
+    if (!user) {
+      setRedirectPath('/auth');
+      return;
+    }
+
+    if (meQuery.data) {
+      setRedirectPath(`/journey/${meQuery.data.id}`);
+    } else if (!meQuery.isLoading) {
+      setRedirectPath('/dashboard');
+    }
+  }, [user, loading, setupQuery.data, setupQuery.isLoading, meQuery.data, meQuery.isLoading]);
 
   if (loading || !redirectPath) {
     return (

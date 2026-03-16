@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ArrowLeft, Building2, Crown } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -12,69 +12,34 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { DepartmentWorkspace } from "@/components/department/DepartmentWorkspace";
 import { Spinner } from "@/components/ui/spinner";
 
-interface Department {
-  id: string;
-  name: string;
-  description: string | null;
-  head_id: string | null;
-}
-
-interface Profile {
-  id: string;
-  full_name: string;
-  avatar_url: string | null;
-}
-
 const getInitials = (name: string) =>
   name?.split(' ').map(n => n[0]).join('').toUpperCase() || '??';
 
 const DepartmentPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [department, setDepartment] = useState<Department | null>(null);
-  const [departmentHead, setDepartmentHead] = useState<Profile | null>(null);
-  const [memberCount, setMemberCount] = useState(0);
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   const { user, loading: authLoading } = useAuth();
   const { loading: orgLoading } = useOrganization();
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!authLoading && !user) navigate('/auth');
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    if (id) fetchDepartmentData();
-  }, [id]);
+  const { data: department, isLoading: deptLoading } = trpc.departments.get.useQuery(
+    { id: id! },
+    { enabled: !!id }
+  );
 
-  const fetchDepartmentData = async () => {
-    if (!id) return;
-    try {
-      const { data: deptData, error } = await supabase
-        .from('departments')
-        .select('*')
-        .eq('id', id)
-        .single();
+  const { data: departmentHead } = trpc.profiles.get.useQuery(
+    { id: department?.headId! },
+    { enabled: !!department?.headId }
+  );
 
-      if (error) throw error;
-      setDepartment(deptData);
+  const { data: allProfiles } = trpc.profiles.list.useQuery();
+  const memberCount = allProfiles?.filter((p: any) => p.departmentId === id).length ?? 0;
 
-      const [headRes, countRes] = await Promise.all([
-        deptData.head_id
-          ? supabase.from('profiles').select('id, full_name, avatar_url').eq('id', deptData.head_id).single()
-          : Promise.resolve({ data: null }),
-        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('department_id', id),
-      ]);
-
-      setDepartmentHead((headRes as any).data ?? null);
-      setMemberCount((countRes as any).count ?? 0);
-    } catch (error) {
-      console.error('Error fetching department:', error);
-      toast({ title: "Error", description: "Failed to load department data", variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = deptLoading;
 
   if (authLoading || orgLoading || loading) {
     return (
@@ -112,10 +77,10 @@ const DepartmentPage: React.FC = () => {
           {departmentHead && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Avatar className="h-4 w-4">
-                <AvatarImage src={departmentHead.avatar_url || ''} />
-                <AvatarFallback className="text-[10px]">{getInitials(departmentHead.full_name)}</AvatarFallback>
+                <AvatarImage src={departmentHead.avatarUrl || ''} />
+                <AvatarFallback className="text-[10px]">{getInitials(departmentHead.fullName || '')}</AvatarFallback>
               </Avatar>
-              <span>{departmentHead.full_name}</span>
+              <span>{departmentHead.fullName}</span>
               <Crown className="h-3 w-3 text-primary" />
             </div>
           )}

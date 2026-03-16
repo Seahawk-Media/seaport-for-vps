@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Target, TrendingUp, User, Pencil, Trash2, Search, Building, Users } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useToast } from '@/hooks/use-toast';
 import { useRole } from '@/hooks/useRole';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -20,28 +20,28 @@ interface Measurable {
   id: string;
   name: string;
   description: string | null;
-  target_value: number | null;
-  current_value: number | null;
+  targetValue: number | null;
+  currentValue: number | null;
   unit: string | null;
   frequency: string | null;
-  owner_id: string | null;
-  team_id: string | null;
+  ownerId: string | null;
+  teamId: string | null;
   owner?: {
     id: string;
-    full_name: string;
-    avatar_url: string | null;
+    fullName: string;
+    avatarUrl: string | null;
   } | null;
   team?: {
     id: string;
     name: string;
-    department_id: string | null;
+    departmentId: string | null;
   } | null;
 }
 
 interface Profile {
   id: string;
-  full_name: string;
-  avatar_url: string | null;
+  fullName: string;
+  avatarUrl: string | null;
 }
 
 interface Department {
@@ -52,7 +52,7 @@ interface Department {
 interface Team {
   id: string;
   name: string;
-  department_id: string | null;
+  departmentId: string | null;
 }
 
 interface MeasurablesTabProps {
@@ -64,22 +64,17 @@ interface MeasurablesTabProps {
 }
 
 export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departmentId, showAllFunctions = false, showDeptAll = false }) => {
-  const [measurables, setMeasurables] = useState<Measurable[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingMeasurable, setEditingMeasurable] = useState<Measurable | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    target_value: '',
-    current_value: '',
+    targetValue: '',
+    currentValue: '',
     unit: '',
     frequency: 'weekly',
-    owner_id: '',
-    team_id: ''
+    ownerId: '',
+    teamId: ''
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -89,110 +84,96 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
   const { organization } = useOrganization();
   const canEdit = isAdmin() || isSuperAdmin() || isManager();
 
-  useEffect(() => {
-    fetchData();
-  }, [teamId, departmentId, showAllFunctions, showDeptAll]);
+  const utils = trpc.useUtils();
 
-  const fetchData = async () => {
-    try {
-      let query = supabase
-        .from('measurables')
-        .select('*, owner:profiles!measurables_owner_id_fkey(id, full_name, avatar_url), team:teams!measurables_team_id_fkey(id, name, department_id)')
-        .order('name');
+  const { data: allMeasurables = [], isLoading: loadingMeasurables } = trpc.measurables.list.useQuery();
+  const { data: profiles = [] } = trpc.profiles.list.useQuery();
+  const { data: departments = [] } = trpc.departments.list.useQuery();
+  const { data: allTeams = [] } = trpc.teams.list.useQuery();
 
-      if (showDeptAll && departmentId) {
-        // Department master list: get all teams in this dept, then filter measurables by those team IDs
-        const { data: deptTeams } = await supabase.from('teams').select('id').eq('department_id', departmentId);
-        const teamIds = deptTeams?.map(t => t.id) || [];
-        if (teamIds.length > 0) {
-          query = query.in('team_id', teamIds);
-        } else {
-          setMeasurables([]);
-          setLoading(false);
-          return;
-        }
-      } else if (teamId && !showAllFunctions) {
-        query = query.eq('team_id', teamId);
-      }
-      // showAllFunctions: no filter — show everything
-
-      const [measurablesRes, profilesRes, deptRes, teamsRes] = await Promise.all([
-        query,
-        supabase.from('profiles').select('id, full_name, avatar_url').order('full_name'),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('teams').select('id, name, department_id').order('name')
-      ]);
-
-      if (measurablesRes.error) throw measurablesRes.error;
-      if (profilesRes.error) throw profilesRes.error;
-
-      setMeasurables(measurablesRes.data || []);
-      setProfiles(profilesRes.data || []);
-      setDepartments(deptRes.data || []);
-      setTeams(teamsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching measurables:', error);
-    } finally {
-      setLoading(false);
+  const createMeasurable = trpc.measurables.create.useMutation({
+    onSuccess: () => {
+      utils.measurables.list.invalidate();
+      toast({ title: 'Measurable created' });
+      setShowForm(false);
+      setEditingMeasurable(null);
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to save measurable', variant: 'destructive' });
     }
-  };
+  });
 
-  const handleSubmit = async () => {
+  const updateMeasurable = trpc.measurables.update.useMutation({
+    onSuccess: () => {
+      utils.measurables.list.invalidate();
+      toast({ title: 'Measurable updated' });
+      setShowForm(false);
+      setEditingMeasurable(null);
+      resetForm();
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to save measurable', variant: 'destructive' });
+    }
+  });
+
+  const deleteMeasurable = trpc.measurables.delete.useMutation({
+    onSuccess: () => {
+      utils.measurables.list.invalidate();
+      toast({ title: 'Measurable deleted' });
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to delete measurable', variant: 'destructive' });
+    }
+  });
+
+  // Filter measurables based on props
+  const teams: Team[] = allTeams.map((t: { id: string; name: string; departmentId?: string | null }) => ({
+    id: t.id,
+    name: t.name,
+    departmentId: t.departmentId ?? null,
+  }));
+
+  const measurables: Measurable[] = (() => {
+    let filtered = allMeasurables as Measurable[];
+    if (showDeptAll && departmentId) {
+      const teamIds = teams.filter(t => t.departmentId === departmentId).map(t => t.id);
+      filtered = filtered.filter(m => m.teamId && teamIds.includes(m.teamId));
+    } else if (teamId && !showAllFunctions) {
+      filtered = filtered.filter(m => m.teamId === teamId);
+    }
+    return filtered;
+  })();
+
+  const handleSubmit = () => {
     if (!formData.name.trim() || !organization) return;
 
-    if (showAllFunctions && !formData.team_id) {
+    if (showAllFunctions && !formData.teamId) {
       toast({ title: "Error", description: "Please select a function", variant: "destructive" });
       return;
     }
 
-    try {
-      const data = {
-        name: formData.name.trim(),
-        description: formData.description.trim() || null,
-        target_value: formData.target_value ? parseFloat(formData.target_value) : null,
-        current_value: formData.current_value ? parseFloat(formData.current_value) : null,
-        unit: formData.unit.trim() || null,
-        frequency: formData.frequency,
-        owner_id: formData.owner_id || null,
-        team_id: showAllFunctions ? (formData.team_id || null) : (teamId || null),
-        organization_id: organization.id
-      };
+    const data = {
+      name: formData.name.trim(),
+      description: formData.description.trim() || null,
+      targetValue: formData.targetValue ? parseFloat(formData.targetValue) : null,
+      currentValue: formData.currentValue ? parseFloat(formData.currentValue) : null,
+      unit: formData.unit.trim() || null,
+      frequency: formData.frequency,
+      ownerId: formData.ownerId || null,
+      teamId: showAllFunctions ? (formData.teamId || null) : (teamId || null),
+      organizationId: organization.id
+    };
 
-      if (editingMeasurable) {
-        const { error } = await supabase
-          .from('measurables')
-          .update(data)
-          .eq('id', editingMeasurable.id);
-        if (error) throw error;
-        toast({ title: 'Measurable updated' });
-      } else {
-        const { error } = await supabase
-          .from('measurables')
-          .insert([data]);
-        if (error) throw error;
-        toast({ title: 'Measurable created' });
-      }
-
-      setShowForm(false);
-      setEditingMeasurable(null);
-      resetForm();
-      fetchData();
-    } catch (error) {
-      console.error('Error saving measurable:', error);
-      toast({ title: 'Error', description: 'Failed to save measurable', variant: 'destructive' });
+    if (editingMeasurable) {
+      updateMeasurable.mutate({ id: editingMeasurable.id, ...data });
+    } else {
+      createMeasurable.mutate(data);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    try {
-      const { error } = await supabase.from('measurables').delete().eq('id', id);
-      if (error) throw error;
-      toast({ title: 'Measurable deleted' });
-      fetchData();
-    } catch (error) {
-      console.error('Error deleting measurable:', error);
-      toast({ title: 'Error', description: 'Failed to delete measurable', variant: 'destructive' });
-    }
+  const handleDelete = (id: string) => {
+    deleteMeasurable.mutate({ id });
   };
 
   const handleEdit = (measurable: Measurable) => {
@@ -200,12 +181,12 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
     setFormData({
       name: measurable.name,
       description: measurable.description || '',
-      target_value: measurable.target_value?.toString() || '',
-      current_value: measurable.current_value?.toString() || '',
+      targetValue: measurable.targetValue?.toString() || '',
+      currentValue: measurable.currentValue?.toString() || '',
       unit: measurable.unit || '',
       frequency: measurable.frequency || 'weekly',
-      owner_id: measurable.owner_id || '',
-      team_id: measurable.team_id || ''
+      ownerId: measurable.ownerId || '',
+      teamId: measurable.teamId || ''
     });
     setShowForm(true);
   };
@@ -214,12 +195,12 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
     setFormData({
       name: '',
       description: '',
-      target_value: '',
-      current_value: '',
+      targetValue: '',
+      currentValue: '',
       unit: '',
       frequency: 'weekly',
-      owner_id: '',
-      team_id: ''
+      ownerId: '',
+      teamId: ''
     });
   };
 
@@ -234,19 +215,19 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
   const filteredMeasurables = measurables.filter(m => {
     const matchesSearch = m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (m.description?.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const mDeptId = m.team?.department_id;
+
+    const mDeptId = m.team?.departmentId;
     const matchesDept = filterDepartment === 'all' || mDeptId === filterDepartment;
-    const matchesFunc = filterFunction === 'all' || m.team_id === filterFunction;
-    
+    const matchesFunc = filterFunction === 'all' || m.teamId === filterFunction;
+
     return matchesSearch && matchesDept && matchesFunc;
   });
 
-  const filteredTeams = filterDepartment === 'all' 
-    ? teams 
-    : teams.filter(t => t.department_id === filterDepartment);
+  const filteredTeams = filterDepartment === 'all'
+    ? teams
+    : teams.filter(t => t.departmentId === filterDepartment);
 
-  if (loading) {
+  if (loadingMeasurables) {
     return (
       <div className="flex items-center justify-center h-32">
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
@@ -280,13 +261,13 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                 {(showAllFunctions || editingMeasurable) && (
                   <div className="space-y-2">
                     <Label>Function *</Label>
-                    <Select value={formData.team_id} onValueChange={(v) => setFormData({ ...formData, team_id: v })}>
+                    <Select value={formData.teamId} onValueChange={(v) => setFormData({ ...formData, teamId: v })}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select function" />
                       </SelectTrigger>
                       <SelectContent>
                         {teams.map(team => {
-                          const dept = departments.find(d => d.id === team.department_id);
+                          const dept = departments.find((d: { id: string; name: string }) => d.id === team.departmentId);
                           return (
                             <SelectItem key={team.id} value={team.id}>
                               {team.name} {dept && <span className="text-muted-foreground">({dept.name})</span>}
@@ -299,16 +280,16 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                 )}
                 <div className="space-y-2">
                   <Label>Name *</Label>
-                  <Input 
-                    value={formData.name} 
+                  <Input
+                    value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     placeholder="e.g., Weekly Revenue"
                   />
                 </div>
                 <div className="space-y-2">
                   <Label>Description</Label>
-                  <Textarea 
-                    value={formData.description} 
+                  <Textarea
+                    value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     placeholder="Brief description of this measurable"
                     rows={2}
@@ -317,19 +298,19 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Target Value</Label>
-                    <Input 
+                    <Input
                       type="number"
-                      value={formData.target_value} 
-                      onChange={(e) => setFormData({ ...formData, target_value: e.target.value })}
+                      value={formData.targetValue}
+                      onChange={(e) => setFormData({ ...formData, targetValue: e.target.value })}
                       placeholder="100"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label>Current Value</Label>
-                    <Input 
+                    <Input
                       type="number"
-                      value={formData.current_value} 
-                      onChange={(e) => setFormData({ ...formData, current_value: e.target.value })}
+                      value={formData.currentValue}
+                      onChange={(e) => setFormData({ ...formData, currentValue: e.target.value })}
                       placeholder="75"
                     />
                   </div>
@@ -337,8 +318,8 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Unit</Label>
-                    <Input 
-                      value={formData.unit} 
+                    <Input
+                      value={formData.unit}
                       onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
                       placeholder="e.g., $, %, units"
                     />
@@ -360,14 +341,14 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                 </div>
                 <div className="space-y-2">
                   <Label>Owner</Label>
-                  <Select value={formData.owner_id} onValueChange={(value) => setFormData({ ...formData, owner_id: value })}>
+                  <Select value={formData.ownerId} onValueChange={(value) => setFormData({ ...formData, ownerId: value })}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select owner" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="">No owner</SelectItem>
-                      {profiles.map(profile => (
-                        <SelectItem key={profile.id} value={profile.id}>{profile.full_name}</SelectItem>
+                      {(profiles as Profile[]).map(profile => (
+                        <SelectItem key={profile.id} value={profile.id}>{profile.fullName}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -402,7 +383,7 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Departments</SelectItem>
-              {departments.map(dept => (
+              {(departments as Department[]).map(dept => (
                 <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
               ))}
             </SelectContent>
@@ -445,8 +426,8 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
             </TableHeader>
             <TableBody>
               {filteredMeasurables.map((measurable) => {
-                const progress = getProgressPercentage(measurable.current_value, measurable.target_value);
-                const dept = departments.find(d => d.id === measurable.team?.department_id);
+                const progress = getProgressPercentage(measurable.currentValue, measurable.targetValue);
+                const dept = departments.find((d: { id: string; name: string }) => d.id === measurable.team?.departmentId);
                 return (
                   <TableRow key={measurable.id}>
                     <TableCell className="font-medium">{measurable.name}</TableCell>
@@ -454,7 +435,7 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                       <div className="flex items-center gap-2">
                         <Progress value={progress} className="h-2 w-24" />
                         <span className="text-sm text-muted-foreground">
-                          {measurable.current_value ?? 0}{measurable.unit} / {measurable.target_value ?? 0}{measurable.unit}
+                          {measurable.currentValue ?? 0}{measurable.unit} / {measurable.targetValue ?? 0}{measurable.unit}
                         </span>
                       </div>
                     </TableCell>
@@ -465,10 +446,10 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                       {measurable.owner ? (
                         <div className="flex items-center gap-2">
                           <Avatar className="h-6 w-6">
-                            <AvatarImage src={measurable.owner.avatar_url || ''} />
-                            <AvatarFallback className="text-xs">{getInitials(measurable.owner.full_name)}</AvatarFallback>
+                            <AvatarImage src={measurable.owner.avatarUrl || ''} />
+                            <AvatarFallback className="text-xs">{getInitials(measurable.owner.fullName)}</AvatarFallback>
                           </Avatar>
-                          <span className="text-sm">{measurable.owner.full_name}</span>
+                          <span className="text-sm">{measurable.owner.fullName}</span>
                         </div>
                       ) : '-'}
                     </TableCell>
@@ -509,7 +490,7 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {filteredMeasurables.map((measurable) => {
-            const progress = getProgressPercentage(measurable.current_value, measurable.target_value);
+            const progress = getProgressPercentage(measurable.currentValue, measurable.targetValue);
             return (
               <Card key={measurable.id}>
                 <CardHeader className="pb-2">
@@ -534,12 +515,12 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                   {measurable.description && (
                     <p className="text-sm text-muted-foreground">{measurable.description}</p>
                   )}
-                  
+
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Progress</span>
                       <span className="font-medium">
-                        {measurable.current_value ?? 0}{measurable.unit} / {measurable.target_value ?? 0}{measurable.unit}
+                        {measurable.currentValue ?? 0}{measurable.unit} / {measurable.targetValue ?? 0}{measurable.unit}
                       </span>
                     </div>
                     <Progress value={progress} className="h-2" />
@@ -555,10 +536,10 @@ export const MeasurablesTab: React.FC<MeasurablesTabProps> = ({ teamId, departme
                     <div className="flex items-center gap-2 pt-2 border-t">
                       <User className="h-3.5 w-3.5 text-muted-foreground" />
                       <Avatar className="h-5 w-5">
-                        <AvatarImage src={measurable.owner.avatar_url || ''} />
-                        <AvatarFallback className="text-xs">{getInitials(measurable.owner.full_name)}</AvatarFallback>
+                        <AvatarImage src={measurable.owner.avatarUrl || ''} />
+                        <AvatarFallback className="text-xs">{getInitials(measurable.owner.fullName)}</AvatarFallback>
                       </Avatar>
-                      <span className="text-sm">{measurable.owner.full_name}</span>
+                      <span className="text-sm">{measurable.owner.fullName}</span>
                     </div>
                   )}
                 </CardContent>

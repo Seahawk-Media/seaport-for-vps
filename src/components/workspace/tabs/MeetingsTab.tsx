@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Video, ExternalLink, Edit, Trash2, Calendar, Search, Building, Users } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -28,13 +28,13 @@ interface Meeting {
   id: string;
   title: string;
   description: string | null;
-  meeting_url: string | null;
+  meetingUrl: string | null;
   recurrence: string | null;
-  scheduled_at: string | null;
-  duration_minutes: number | null;
-  team_id: string | null;
-  department_id: string | null;
-  team?: { id: string; name: string; department_id: string | null } | null;
+  scheduledAt: string | null;
+  durationMinutes: number | null;
+  teamId: string | null;
+  departmentId: string | null;
+  team?: { id: string; name: string; departmentId: string | null } | null;
 }
 
 interface Department {
@@ -45,24 +45,20 @@ interface Department {
 interface Team {
   id: string;
   name: string;
-  department_id: string | null;
+  departmentId: string | null;
 }
 
 export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, showAllFunctions = false, showDeptAll = false }) => {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<Meeting | null>(null);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    meeting_url: '',
+    meetingUrl: '',
     recurrence: 'weekly',
-    scheduled_at: '',
-    duration_minutes: 60,
-    team_id: ''
+    scheduledAt: '',
+    durationMinutes: 60,
+    teamId: ''
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -72,108 +68,99 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
   const { organization } = useOrganization();
 
   const canManage = isAdmin() || isSuperAdmin() || isManager();
+  const utils = trpc.useUtils();
 
-  useEffect(() => {
-    fetchData();
-  }, [departmentId, teamId, showAllFunctions, showDeptAll]);
+  const meetingsQuery = trpc.meetings.list.useQuery();
+  const departmentsQuery = trpc.departments.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
 
-  const fetchData = async () => {
-    try {
-      let query = supabase.from('meetings').select('*, team:teams(id, name, department_id)');
-      
-      if (showAllFunctions) {
-        // Show all meetings across all functions
-      } else if (teamId) {
-        query = query.eq('team_id', teamId);
-      } else if (showDeptAll && departmentId) {
-        // Department master list: all meetings where department_id matches (incl. function-level)
-        query = query.eq('department_id', departmentId);
-      } else if (departmentId) {
-        query = query.eq('department_id', departmentId).is('team_id', null);
-      }
+  const createMutation = trpc.meetings.create.useMutation({
+    onSuccess: () => {
+      toast({ title: "Meeting added" });
+      resetForm();
+      utils.meetings.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      const [meetingsRes, deptRes, teamsRes] = await Promise.all([
-        query.order('scheduled_at', { ascending: true, nullsFirst: false }),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('teams').select('id, name, department_id').order('name')
-      ]);
+  const updateMutation = trpc.meetings.update.useMutation({
+    onSuccess: () => {
+      toast({ title: "Meeting updated" });
+      resetForm();
+      utils.meetings.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
 
-      if (meetingsRes.error) throw meetingsRes.error;
-      setMeetings(meetingsRes.data || []);
-      setDepartments(deptRes.data || []);
-      setTeams(teamsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching meetings:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const deleteMutation = trpc.meetings.delete.useMutation({
+    onSuccess: () => {
+      toast({ title: "Meeting deleted" });
+      utils.meetings.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const allMeetings = (meetingsQuery.data || []) as Meeting[];
+  const departments = (departmentsQuery.data || []) as Department[];
+  const teams = (teamsQuery.data || []) as Team[];
+  const loading = meetingsQuery.isLoading;
+
+  // Filter meetings based on scope
+  const meetings = allMeetings.filter(meeting => {
+    if (showAllFunctions) return true;
+    if (teamId) return meeting.teamId === teamId;
+    if (showDeptAll && departmentId) return meeting.departmentId === departmentId;
+    if (departmentId) return meeting.departmentId === departmentId && !meeting.teamId;
+    return true;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization) return;
 
-    if (showAllFunctions && !formData.team_id) {
+    if (showAllFunctions && !formData.teamId) {
       toast({ title: "Error", description: "Please select a function", variant: "destructive" });
       return;
     }
 
-    const selectedTeam = teams.find(t => t.id === formData.team_id);
+    const selectedTeam = teams.find(t => t.id === formData.teamId);
 
-    try {
-      const payload = {
+    if (editingMeeting) {
+      updateMutation.mutate({
+        id: editingMeeting.id,
         title: formData.title,
-        description: formData.description || null,
-        meeting_url: formData.meeting_url || null,
+        description: formData.description || undefined,
+        scheduledAt: formData.scheduledAt || undefined,
+        durationMinutes: formData.durationMinutes,
+      });
+    } else {
+      createMutation.mutate({
+        title: formData.title,
+        description: formData.description || undefined,
+        meetingUrl: formData.meetingUrl || undefined,
         recurrence: formData.recurrence,
-        scheduled_at: formData.scheduled_at || null,
-        duration_minutes: formData.duration_minutes,
-        team_id: showAllFunctions ? (formData.team_id || null) : (teamId || null),
-        department_id: showAllFunctions ? (selectedTeam?.department_id || null) : (departmentId || null),
-      };
-
-      if (editingMeeting) {
-        const { error } = await supabase
-          .from('meetings')
-          .update(payload)
-          .eq('id', editingMeeting.id);
-
-        if (error) throw error;
-        toast({ title: "Meeting updated" });
-      } else {
-        const { error } = await supabase
-          .from('meetings')
-          .insert({
-            ...payload,
-            organization_id: organization.id,
-          });
-
-        if (error) throw error;
-        toast({ title: "Meeting added" });
-      }
-
-      resetForm();
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+        scheduledAt: formData.scheduledAt || undefined,
+        durationMinutes: formData.durationMinutes,
+        departmentId: showAllFunctions ? (selectedTeam?.departmentId || undefined) : (departmentId || undefined),
+        teamId: showAllFunctions ? (formData.teamId || undefined) : (teamId || undefined),
+      });
     }
   };
 
   const resetForm = () => {
     setDialogOpen(false);
     setEditingMeeting(null);
-    setFormData({ title: '', description: '', meeting_url: '', recurrence: 'weekly', scheduled_at: '', duration_minutes: 60, team_id: '' });
+    setFormData({ title: '', description: '', meetingUrl: '', recurrence: 'weekly', scheduledAt: '', durationMinutes: 60, teamId: '' });
   };
 
-  const handleDelete = async (id: string) => {
-    try {
-      const { error } = await supabase.from('meetings').delete().eq('id', id);
-      if (error) throw error;
-      toast({ title: "Meeting deleted" });
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate({ id });
   };
 
   const openEdit = (meeting: Meeting) => {
@@ -181,11 +168,11 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
     setFormData({
       title: meeting.title,
       description: meeting.description || '',
-      meeting_url: meeting.meeting_url || '',
+      meetingUrl: meeting.meetingUrl || '',
       recurrence: meeting.recurrence || 'weekly',
-      scheduled_at: meeting.scheduled_at ? meeting.scheduled_at.slice(0, 16) : '',
-      duration_minutes: meeting.duration_minutes || 60,
-      team_id: meeting.team_id || ''
+      scheduledAt: meeting.scheduledAt ? meeting.scheduledAt.slice(0, 16) : '',
+      durationMinutes: meeting.durationMinutes || 60,
+      teamId: meeting.teamId || ''
     });
     setDialogOpen(true);
   };
@@ -203,17 +190,17 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
   const filteredMeetings = meetings.filter(meeting => {
     const matchesSearch = meeting.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (meeting.description?.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const meetingDeptId = meeting.team?.department_id || meeting.department_id;
+
+    const meetingDeptId = meeting.team?.departmentId || meeting.departmentId;
     const matchesDept = filterDepartment === 'all' || meetingDeptId === filterDepartment;
-    const matchesFunc = filterFunction === 'all' || meeting.team_id === filterFunction;
-    
+    const matchesFunc = filterFunction === 'all' || meeting.teamId === filterFunction;
+
     return matchesSearch && matchesDept && matchesFunc;
   });
 
-  const filteredTeams = filterDepartment === 'all' 
-    ? teams 
-    : teams.filter(t => t.department_id === filterDepartment);
+  const filteredTeams = filterDepartment === 'all'
+    ? teams
+    : teams.filter(t => t.departmentId === filterDepartment);
 
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-muted-foreground">Loading meetings...</div>;
@@ -242,13 +229,13 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
                 {(showAllFunctions || editingMeeting) && (
                   <div className="space-y-2">
                     <Label>Function *</Label>
-                    <Select value={formData.team_id} onValueChange={(v) => setFormData({ ...formData, team_id: v })}>
+                    <Select value={formData.teamId} onValueChange={(v) => setFormData({ ...formData, teamId: v })}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select function" />
                       </SelectTrigger>
                       <SelectContent>
                         {teams.map(team => {
-                          const dept = departments.find(d => d.id === team.department_id);
+                          const dept = departments.find(d => d.id === team.departmentId);
                           return (
                             <SelectItem key={team.id} value={team.id}>
                               {team.name} {dept && <span className="text-muted-foreground">({dept.name})</span>}
@@ -272,8 +259,8 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
                 />
                 <Input
                   placeholder="Meeting URL (Zoom, Google Meet, etc.)"
-                  value={formData.meeting_url}
-                  onChange={(e) => setFormData({ ...formData, meeting_url: e.target.value })}
+                  value={formData.meetingUrl}
+                  onChange={(e) => setFormData({ ...formData, meetingUrl: e.target.value })}
                 />
                 <Select value={formData.recurrence} onValueChange={(v) => setFormData({ ...formData, recurrence: v })}>
                   <SelectTrigger>
@@ -288,14 +275,14 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
                 </Select>
                 <Input
                   type="datetime-local"
-                  value={formData.scheduled_at}
-                  onChange={(e) => setFormData({ ...formData, scheduled_at: e.target.value })}
+                  value={formData.scheduledAt}
+                  onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
                 />
                 <Input
                   type="number"
                   placeholder="Duration (minutes)"
-                  value={formData.duration_minutes}
-                  onChange={(e) => setFormData({ ...formData, duration_minutes: parseInt(e.target.value) || 60 })}
+                  value={formData.durationMinutes}
+                  onChange={(e) => setFormData({ ...formData, durationMinutes: parseInt(e.target.value) || 60 })}
                 />
                 <Button type="submit" className="w-full">
                   {editingMeeting ? 'Update' : 'Add'} Meeting
@@ -360,21 +347,21 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
             </TableHeader>
             <TableBody>
               {filteredMeetings.map((meeting) => {
-                const dept = departments.find(d => d.id === (meeting.team?.department_id || meeting.department_id));
+                const dept = departments.find(d => d.id === (meeting.team?.departmentId || meeting.departmentId));
                 return (
                   <TableRow key={meeting.id}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         {meeting.title}
-                        {meeting.meeting_url && (
-                          <a href={meeting.meeting_url} target="_blank" rel="noopener noreferrer" className="text-primary">
+                        {meeting.meetingUrl && (
+                          <a href={meeting.meetingUrl} target="_blank" rel="noopener noreferrer" className="text-primary">
                             <ExternalLink className="h-3 w-3" />
                           </a>
                         )}
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {meeting.scheduled_at ? format(new Date(meeting.scheduled_at), 'PPp') : '-'}
+                      {meeting.scheduledAt ? format(new Date(meeting.scheduledAt), 'PPp') : '-'}
                     </TableCell>
                     <TableCell>
                       <Badge className={getRecurrenceBadge(meeting.recurrence)}>
@@ -441,16 +428,16 @@ export const MeetingsTab: React.FC<MeetingsTabProps> = ({ departmentId, teamId, 
                 {meeting.description && <CardDescription>{meeting.description}</CardDescription>}
               </CardHeader>
               <CardContent className="space-y-2">
-                {meeting.scheduled_at && (
+                {meeting.scheduledAt && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Calendar className="h-4 w-4" />
-                    {format(new Date(meeting.scheduled_at), 'PPp')}
-                    {meeting.duration_minutes && ` (${meeting.duration_minutes} min)`}
+                    {format(new Date(meeting.scheduledAt), 'PPp')}
+                    {meeting.durationMinutes && ` (${meeting.durationMinutes} min)`}
                   </div>
                 )}
-                {meeting.meeting_url && (
+                {meeting.meetingUrl && (
                   <a
-                    href={meeting.meeting_url}
+                    href={meeting.meetingUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm text-primary hover:underline flex items-center gap-1"

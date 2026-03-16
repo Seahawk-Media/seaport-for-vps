@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -31,57 +31,36 @@ export function AddEventModal({ isOpen, onClose, employeeId, onEventAdded }: Add
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [eventType, setEventType] = useState("");
-  const [loading, setLoading] = useState(false);
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title || !eventType || !user) return;
-
-    setLoading(true);
-    try {
-      // Get current user's profile ID and organization
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id, organization_id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (!profile) {
-        throw new Error("Profile not found");
-      }
-
-      const { error } = await supabase
-        .from("trail_events")
-        .insert({
-          profile_id: employeeId,
-          event_type: eventType,
-          title,
-          description: description || null,
-          created_by: user.id,
-          organization_id: profile.organization_id,
-        });
-
-      if (error) throw error;
-
+  const createActivity = trpc.activity.create.useMutation({
+    onSuccess: () => {
       toast({
         title: "Event added",
         description: "Journey event has been successfully added.",
       });
-
       onEventAdded();
       handleClose();
-    } catch (error) {
-      console.error("Error adding event:", error);
+    },
+    onError: () => {
       toast({
         title: "Error",
         description: "Failed to add event. Please try again.",
         variant: "destructive",
       });
-    } finally {
-      setLoading(false);
-    }
+    },
+  });
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title || !eventType || !user) return;
+
+    createActivity.mutate({
+      activityType: eventType,
+      description: title + (description ? `: ${description}` : ''),
+      metadata: { employeeId, description },
+    });
   };
 
   const handleClose = () => {
@@ -144,8 +123,8 @@ export function AddEventModal({ isOpen, onClose, employeeId, onEventAdded }: Add
             <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading || !title || !eventType}>
-              {loading ? "Adding..." : "Add Event"}
+            <Button type="submit" disabled={createActivity.isPending || !title || !eventType}>
+              {createActivity.isPending ? "Adding..." : "Add Event"}
             </Button>
           </DialogFooter>
         </form>

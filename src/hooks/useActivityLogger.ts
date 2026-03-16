@@ -1,8 +1,8 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useOrganization } from './useOrganization';
+import { trpc } from '@/lib/trpc';
 
 type ActivityType = 'login' | 'logout' | 'page_view' | 'action';
 
@@ -19,24 +19,8 @@ export const useActivityLogger = () => {
   const location = useLocation();
   const lastLoggedPath = useRef<string | null>(null);
   const isLogging = useRef(false);
-  const [profileId, setProfileId] = useState<string | null>(null);
 
-  // Fetch profile ID when user changes
-  useEffect(() => {
-    const fetchProfile = async () => {
-      if (!user) {
-        setProfileId(null);
-        return;
-      }
-      const { data } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-      if (data) setProfileId(data.id);
-    };
-    fetchProfile();
-  }, [user]);
+  const createActivity = trpc.activity.create.useMutation();
 
   const logActivity = useCallback(async ({
     activityType,
@@ -44,32 +28,29 @@ export const useActivityLogger = () => {
     metadata = {},
     pagePath
   }: LogActivityParams) => {
-    if (!user || !organization?.id || !profileId) return;
+    if (!user || !organization?.id) return;
 
     try {
-      await supabase.from('activity_logs').insert([{
-        profile_id: profileId,
-        organization_id: organization.id,
-        activity_type: activityType,
-        description,
-        metadata: metadata as unknown as null,
-        page_path: pagePath || location.pathname,
-        user_agent: navigator.userAgent
-      }]);
-    } catch (error) {
-      console.error('Failed to log activity:', error);
+      createActivity.mutate({
+        activityType,
+        description: description || `${activityType}: ${pagePath || location.pathname}`,
+        metadata,
+        pagePath: pagePath || location.pathname,
+      });
+    } catch {
+      // Activity logging is non-critical; silently ignore failures
     }
-  }, [user, organization?.id, profileId, location.pathname]);
+  }, [user, organization?.id, location.pathname, createActivity]);
 
   // Track page views
   useEffect(() => {
-    if (!user || !organization?.id || !profileId) return;
+    if (!user || !organization?.id) return;
     if (isLogging.current) return;
     if (lastLoggedPath.current === location.pathname) return;
-    
+
     isLogging.current = true;
     lastLoggedPath.current = location.pathname;
-    
+
     logActivity({
       activityType: 'page_view',
       description: `Viewed ${location.pathname}`,
@@ -77,32 +58,24 @@ export const useActivityLogger = () => {
     }).finally(() => {
       isLogging.current = false;
     });
-  }, [location.pathname, user, organization?.id, profileId, logActivity]);
+  }, [location.pathname, user, organization?.id, logActivity]);
 
   return { logActivity };
 };
 
-// Standalone function for login tracking (used before hooks are available)
+// Standalone function for login tracking
 export const logLoginActivity = async (userId: string) => {
   try {
-    // Get user's profile and organization
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id, organization_id')
-      .eq('user_id', userId)
-      .single();
-
-    if (!profile?.organization_id) return;
-
-    await supabase.from('activity_logs').insert([{
-      profile_id: profile.id,
-      organization_id: profile.organization_id,
-      activity_type: 'login',
-      description: 'User logged in',
-      user_agent: navigator.userAgent,
-      page_path: window.location.pathname
-    }]);
-  } catch (error) {
-    console.error('Failed to log login activity:', error);
+    await fetch('/trpc/activity.create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        activityType: 'login',
+        description: 'User logged in',
+        pagePath: window.location.pathname,
+      }),
+    });
+  } catch {
+    // Login activity logging is non-critical; silently ignore failures
   }
 };

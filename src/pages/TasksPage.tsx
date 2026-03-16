@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { TasksTab } from "@/components/workspace/tabs/TasksTab";
 import { MyTasksView } from "@/components/tasks/MyTasksView";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -16,8 +16,6 @@ interface Department {
 type ViewFilter = 'all' | 'mine';
 
 const TasksPage = () => {
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<ViewFilter>('all');
   const { user } = useAuth();
   const { isAdmin, isSuperAdmin, isManager } = useRole();
@@ -25,36 +23,21 @@ const TasksPage = () => {
 
   const isElevated = isAdmin() || isSuperAdmin() || isManager();
 
-  useEffect(() => {
-    if (organization) fetchDepartments();
-  }, [organization, user]);
+  const { data: allDepartments, isLoading: loadingDepts } = trpc.departments.list.useQuery(undefined, {
+    enabled: isElevated && !!organization,
+  });
 
-  const fetchDepartments = async () => {
-    setLoading(true);
-    try {
-      if (isElevated) {
-        const { data } = await supabase
-          .from('departments')
-          .select('id, name')
-          .eq('organization_id', organization!.id)
-          .order('name');
-        setDepartments(data || []);
-      } else {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('department_id, department:departments(id, name)')
-          .eq('user_id', user!.id)
-          .single();
+  const { data: myProfile, isLoading: loadingProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !isElevated && !!user,
+  });
 
-        if (profile?.department_id && profile.department) {
-          const dept = profile.department as unknown as Department;
-          setDepartments([{ id: dept.id, name: dept.name }]);
-        }
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = isElevated ? loadingDepts : loadingProfile;
+
+  const departments: Department[] = isElevated
+    ? (allDepartments || []).map((d: any) => ({ id: d.id, name: d.name }))
+    : myProfile?.departmentId
+      ? [{ id: myProfile.departmentId, name: myProfile.department?.name || '' }].filter(d => d.name)
+      : [];
 
   return (
     <DashboardLayout

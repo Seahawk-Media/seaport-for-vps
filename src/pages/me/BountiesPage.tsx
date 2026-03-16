@@ -6,27 +6,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { format } from 'date-fns';
 import { Plus, Trophy, ExternalLink } from 'lucide-react';
 import { IncentiveSubmissionForm } from '@/components/incentives/IncentiveSubmissionForm';
 
-interface Incentive {
-  id: string;
-  incentive_type: string;
-  title: string;
-  description: string | null;
-  evidence_url: string | null;
-  points: number;
-  status: string;
-  created_at: string;
-}
-
 export default function MeIncentivesPage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [incentives, setIncentives] = useState<Incentive[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
@@ -35,36 +22,16 @@ export default function MeIncentivesPage() {
     }
   }, [user, authLoading, navigate]);
 
-  const fetchIncentives = async () => {
-    if (!user) return;
+  const { data: myProfile } = trpc.profiles.me.useQuery(undefined, {
+    enabled: !!user,
+  });
 
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+  const { data: allIncentives, isLoading: loading, refetch: refetchIncentives } = trpc.incentives.list.useQuery(undefined, {
+    enabled: !!myProfile,
+  });
 
-      if (!profile) return;
-
-      const { data, error } = await (supabase
-        .from('incentives' as any)
-        .select('*')
-        .eq('profile_id', profile.id)
-        .order('created_at', { ascending: false }) as any);
-
-      if (error) throw error;
-      setIncentives((data || []) as Incentive[]);
-    } catch (error) {
-      console.error('Error fetching incentives:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchIncentives();
-  }, [user]);
+  // Filter to only my incentives
+  const incentives = (allIncentives ?? []).filter((i: any) => i.profileId === myProfile?.id);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -76,8 +43,8 @@ export default function MeIncentivesPage() {
   };
 
   const totalPoints = incentives
-    .filter(b => b.status === 'approved')
-    .reduce((sum, b) => sum + b.points, 0);
+    .filter((b: any) => b.status === 'approved')
+    .reduce((sum: number, b: any) => sum + b.points, 0);
 
   if (authLoading || loading) {
     return (
@@ -117,7 +84,7 @@ export default function MeIncentivesPage() {
             onClose={() => setShowForm(false)}
             onSuccess={() => {
               setShowForm(false);
-              fetchIncentives();
+              refetchIncentives();
             }}
           />
         )}
@@ -126,16 +93,16 @@ export default function MeIncentivesPage() {
           <EmptyState icon={Trophy} title="No incentives submitted yet." description="Submit your achievements to earn points!" />
         ) : (
           <div className="space-y-4">
-            {incentives.map((incentive) => (
+            {incentives.map((incentive: any) => (
               <Card key={incentive.id}>
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-base">{incentive.title}</CardTitle>
-                        {incentive.evidence_url && (
+                        {incentive.evidenceUrl && (
                           <a
-                            href={incentive.evidence_url}
+                            href={incentive.evidenceUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-primary hover:text-primary/80"
@@ -145,7 +112,7 @@ export default function MeIncentivesPage() {
                         )}
                       </div>
                       <CardDescription>
-                        {incentive.incentive_type} • {format(new Date(incentive.created_at), 'MMM d, yyyy')}
+                        {incentive.incentiveType} • {format(new Date(incentive.createdAt), 'MMM d, yyyy')}
                       </CardDescription>
                     </div>
                     <div className="flex items-center gap-2">

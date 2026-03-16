@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Bot, Edit, Trash2, Power, PowerOff, Search, Building, Users, Globe } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useOrganization } from "@/hooks/useOrganization";
 
-// ─── Model catalogue (mirrors AIModelsManagement) ─────────────────────────────
+// Model catalogue (mirrors AIModelsManagement)
 
 const PROVIDER_MODELS: Record<string, { value: string; label: string }[]> = {
   anthropic: [
@@ -47,7 +47,7 @@ const TIER_OPTIONS = [
   { value: 'functional',    label: 'Functional', description: 'Scoped to a specific function', Icon: Users },
 ];
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Types
 
 interface AgentsTabProps {
   departmentId?: string;
@@ -63,29 +63,24 @@ interface Agent {
   type: string | null;
   status: string | null;
   config: unknown;
-  team_id: string | null;
-  department_id: string | null;
+  teamId: string | null;
+  departmentId: string | null;
   tier: string | null;
-  system_prompt: string | null;
-  ai_provider: string | null;
-  ai_model: string | null;
-  team?: { id: string; name: string; department_id: string | null } | null;
+  systemPrompt: string | null;
+  aiProvider: string | null;
+  aiModel: string | null;
+  team?: { id: string; name: string; departmentId: string | null } | null;
 }
 
 interface Department { id: string; name: string }
-interface Team { id: string; name: string; department_id: string | null }
-interface AIConfig { provider: string; is_enabled: boolean }
+interface Team { id: string; name: string; departmentId: string | null }
+interface AIConfig { provider: string; isEnabled: boolean }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// Component
 
 export const AgentsTab: React.FC<AgentsTabProps> = ({
   departmentId, functionId, showAllFunctions = false, showDeptAll = false,
 }) => {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [formData, setFormData] = useState({
@@ -94,11 +89,11 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
     type: 'automation',
     status: 'inactive',
     tier: showAllFunctions ? 'general' : (functionId ? 'functional' : 'departmental'),
-    team_id: '',
-    department_id: '',
-    ai_provider: '',
-    ai_model: '',
-    system_prompt: '',
+    teamId: '',
+    departmentId: '',
+    aiProvider: '',
+    aiModel: '',
+    systemPrompt: '',
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -108,43 +103,61 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
   const { organization } = useOrganization();
 
   const canManage = isAdmin() || isSuperAdmin();
-  const enabledProviders = aiConfigs.filter(c => c.is_enabled);
+  const utils = trpc.useUtils();
 
-  useEffect(() => { fetchData(); }, [departmentId, functionId, showAllFunctions, showDeptAll]);
+  const agentsQuery = trpc.agents.list.useQuery();
+  const departmentsQuery = trpc.departments.list.useQuery();
+  const teamsQuery = trpc.teams.list.useQuery();
+  const aiConfigQuery = trpc.aiConfig.list.useQuery();
 
-  const fetchData = async () => {
-    if (!organization) return;
-    try {
-      let query = supabase.from('agents').select('*, team:teams(id, name, department_id)');
+  const createMutation = trpc.agents.create.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Agent created' });
+      resetForm();
+      utils.agents.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
 
-      if (showAllFunctions) {
-        // show all
-      } else if (functionId) {
-        query = query.eq('team_id', functionId);
-      } else if (showDeptAll && departmentId) {
-        query = query.eq('department_id', departmentId);
-      } else if (departmentId) {
-        query = query.eq('department_id', departmentId).is('team_id', null);
-      }
+  const updateMutation = trpc.agents.update.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Agent updated' });
+      resetForm();
+      utils.agents.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
 
-      const [agentsRes, deptRes, teamsRes, aiRes] = await Promise.all([
-        query.order('name'),
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('teams').select('id, name, department_id').order('name'),
-        supabase.from('org_ai_config').select('provider, is_enabled').eq('organization_id', organization.id),
-      ]);
+  const deleteMutation = trpc.agents.delete.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Agent deleted' });
+      utils.agents.list.invalidate();
+    },
+    onError: (error) => {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
 
-      if (agentsRes.error) throw agentsRes.error;
-      setAgents((agentsRes.data || []) as Agent[]);
-      setDepartments(deptRes.data || []);
-      setTeams(teamsRes.data || []);
-      setAiConfigs((aiRes.data || []) as AIConfig[]);
-    } catch (error) {
-      console.error('Error fetching agents:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const allAgents = (agentsQuery.data || []) as Agent[];
+  const departments = (departmentsQuery.data || []) as Department[];
+  const teams = (teamsQuery.data || []) as Team[];
+  const aiConfigs = (aiConfigQuery.data || []) as AIConfig[];
+  const loading = agentsQuery.isLoading;
+
+  const enabledProviders = aiConfigs.filter(c => c.isEnabled);
+
+  // Filter agents based on scope
+  const agents = allAgents.filter(agent => {
+    if (showAllFunctions) return true;
+    if (functionId) return agent.teamId === functionId;
+    if (showDeptAll && departmentId) return agent.departmentId === departmentId;
+    if (departmentId) return agent.departmentId === departmentId && !agent.teamId;
+    return true;
+  });
 
   const resetForm = () => {
     setDialogOpen(false);
@@ -152,7 +165,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
     setFormData({
       name: '', description: '', type: 'automation', status: 'inactive',
       tier: showAllFunctions ? 'general' : (functionId ? 'functional' : 'departmental'),
-      team_id: '', department_id: '', ai_provider: '', ai_model: '', system_prompt: '',
+      teamId: '', departmentId: '', aiProvider: '', aiModel: '', systemPrompt: '',
     });
   };
 
@@ -163,71 +176,57 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
     const tier = formData.tier;
 
     // Validation
-    if (tier === 'functional' && !formData.team_id) {
+    if (tier === 'functional' && !formData.teamId) {
       toast({ title: 'Please select a function', variant: 'destructive' }); return;
     }
-    if (tier === 'departmental' && !formData.department_id) {
+    if (tier === 'departmental' && !formData.departmentId) {
       toast({ title: 'Please select a department', variant: 'destructive' }); return;
     }
 
-    const selectedTeam = teams.find(t => t.id === formData.team_id);
+    const selectedTeam = teams.find(t => t.id === formData.teamId);
 
-    const payload: Record<string, unknown> = {
+    const basePayload = {
       name: formData.name,
-      description: formData.description || null,
+      description: formData.description || undefined,
       type: formData.type,
-      status: formData.status,
       tier,
-      system_prompt: formData.system_prompt || null,
-      ai_provider: formData.ai_provider || null,
-      ai_model: formData.ai_model || null,
-      team_id: tier === 'functional' ? (formData.team_id || null) : null,
-      department_id:
-        tier === 'general' ? null :
-        tier === 'functional' ? (selectedTeam?.department_id || null) :
-        (formData.department_id || null),
+      systemPrompt: formData.systemPrompt || undefined,
+      aiProvider: formData.aiProvider || undefined,
+      aiModel: formData.aiModel || undefined,
+      teamId: tier === 'functional' ? (formData.teamId || undefined) : undefined,
+      departmentId:
+        tier === 'general' ? undefined :
+        tier === 'functional' ? (selectedTeam?.departmentId || undefined) :
+        (formData.departmentId || undefined),
     };
 
     // If context-fixed (in a function workspace), override
     if (!showAllFunctions && functionId) {
-      payload.team_id = functionId;
-      payload.department_id = departmentId || null;
-      payload.tier = 'functional';
+      basePayload.teamId = functionId;
+      basePayload.departmentId = departmentId || undefined;
     } else if (!showAllFunctions && departmentId) {
-      payload.department_id = departmentId;
-      payload.tier = 'departmental';
+      basePayload.departmentId = departmentId;
     }
 
-    try {
-      if (editingAgent) {
-        const { error } = await supabase.from('agents').update(payload).eq('id', editingAgent.id);
-        if (error) throw error;
-        toast({ title: 'Agent updated' });
-      } else {
-        const { error } = await (supabase.from('agents') as any).insert({ ...payload, organization_id: organization.id });
-        if (error) throw error;
-        toast({ title: 'Agent created' });
-      }
-      resetForm();
-      fetchData();
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    if (editingAgent) {
+      updateMutation.mutate({ id: editingAgent.id, ...basePayload });
+    } else {
+      createMutation.mutate(basePayload);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const { error } = await supabase.from('agents').delete().eq('id', id);
-    if (error) { toast({ title: 'Error', description: error.message, variant: 'destructive' }); return; }
-    toast({ title: 'Agent deleted' });
-    fetchData();
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate({ id });
   };
 
-  const toggleAgentStatus = async (agent: Agent) => {
+  const toggleAgentStatus = (agent: Agent) => {
     const newStatus = agent.status === 'active' ? 'inactive' : 'active';
-    const { error } = await supabase.from('agents').update({ status: newStatus }).eq('id', agent.id);
-    if (error) { toast({ title: 'Error', description: error.message, variant: 'destructive' }); return; }
-    toast({ title: `Agent ${newStatus === 'active' ? 'activated' : 'deactivated'}` });
-    fetchData();
+    updateMutation.mutate({ id: agent.id, name: agent.name }, {
+      onSuccess: () => {
+        toast({ title: `Agent ${newStatus === 'active' ? 'activated' : 'deactivated'}` });
+        utils.agents.list.invalidate();
+      },
+    });
   };
 
   const openEdit = (agent: Agent) => {
@@ -238,11 +237,11 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
       type: agent.type || 'automation',
       status: agent.status || 'inactive',
       tier: agent.tier || 'functional',
-      team_id: agent.team_id || '',
-      department_id: agent.department_id || '',
-      ai_provider: agent.ai_provider || '',
-      ai_model: agent.ai_model || '',
-      system_prompt: agent.system_prompt || '',
+      teamId: agent.teamId || '',
+      departmentId: agent.departmentId || '',
+      aiProvider: agent.aiProvider || '',
+      aiModel: agent.aiModel || '',
+      systemPrompt: agent.systemPrompt || '',
     });
     setDialogOpen(true);
   };
@@ -275,20 +274,20 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
     const matchesSearch =
       agent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (agent.description?.toLowerCase().includes(searchTerm.toLowerCase()));
-    const agentDeptId = agent.team?.department_id || agent.department_id;
+    const agentDeptId = agent.team?.departmentId || agent.departmentId;
     const matchesDept = filterDepartment === 'all' || agentDeptId === filterDepartment;
-    const matchesFunc = filterFunction === 'all' || agent.team_id === filterFunction;
+    const matchesFunc = filterFunction === 'all' || agent.teamId === filterFunction;
     return matchesSearch && matchesDept && matchesFunc;
   });
 
-  const filteredTeams = filterDepartment === 'all' ? teams : teams.filter(t => t.department_id === filterDepartment);
-  const formTeams = formData.department_id
-    ? teams.filter(t => t.department_id === formData.department_id)
+  const filteredTeams = filterDepartment === 'all' ? teams : teams.filter(t => t.departmentId === filterDepartment);
+  const formTeams = formData.departmentId
+    ? teams.filter(t => t.departmentId === formData.departmentId)
     : teams;
 
   if (loading) return <div className="flex items-center justify-center h-48 text-muted-foreground">Loading agents...</div>;
 
-  // ─── Dialog form ────────────────────────────────────────────────────────────
+  // Dialog form
   const dialogForm = (
     <DialogContent className="max-w-lg">
       <DialogHeader>
@@ -296,7 +295,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
       </DialogHeader>
       <form onSubmit={handleSubmit} className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
 
-        {/* Scope — only show when in the global agents view */}
+        {/* Scope */}
         {(showAllFunctions || editingAgent) && (
           <div className="space-y-2">
             <Label className="text-xs">Tier</Label>
@@ -305,7 +304,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setFormData(f => ({ ...f, tier: value, team_id: '', department_id: '' }))}
+                  onClick={() => setFormData(f => ({ ...f, tier: value, teamId: '', departmentId: '' }))}
                   className={`flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-colors ${
                     formData.tier === value
                       ? 'border-foreground bg-foreground text-background'
@@ -327,7 +326,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
         {(showAllFunctions || editingAgent) && (formData.tier === 'departmental' || formData.tier === 'functional') && (
           <div className="space-y-2">
             <Label className="text-xs">Department</Label>
-            <Select value={formData.department_id} onValueChange={v => setFormData(f => ({ ...f, department_id: v, team_id: '' }))}>
+            <Select value={formData.departmentId} onValueChange={v => setFormData(f => ({ ...f, departmentId: v, teamId: '' }))}>
               <SelectTrigger className="h-8 text-sm">
                 <SelectValue placeholder="Select department" />
               </SelectTrigger>
@@ -344,13 +343,13 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
         {(showAllFunctions || editingAgent) && formData.tier === 'functional' && (
           <div className="space-y-2">
             <Label className="text-xs">Function</Label>
-            <Select value={formData.team_id} onValueChange={v => setFormData(f => ({ ...f, team_id: v }))}>
+            <Select value={formData.teamId} onValueChange={v => setFormData(f => ({ ...f, teamId: v }))}>
               <SelectTrigger className="h-8 text-sm">
                 <SelectValue placeholder="Select function" />
               </SelectTrigger>
               <SelectContent>
                 {formTeams.map(t => {
-                  const dept = departments.find(d => d.id === t.department_id);
+                  const dept = departments.find(d => d.id === t.departmentId);
                   return (
                     <SelectItem key={t.id} value={t.id}>
                       {t.name} {dept && <span className="text-muted-foreground">({dept.name})</span>}
@@ -394,7 +393,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Provider</Label>
-                <Select value={formData.ai_provider} onValueChange={v => setFormData(f => ({ ...f, ai_provider: v, ai_model: '' }))}>
+                <Select value={formData.aiProvider} onValueChange={v => setFormData(f => ({ ...f, aiProvider: v, aiModel: '' }))}>
                   <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select provider" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="">None</SelectItem>
@@ -407,13 +406,13 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Model</Label>
                 <Select
-                  value={formData.ai_model}
-                  onValueChange={v => setFormData(f => ({ ...f, ai_model: v }))}
-                  disabled={!formData.ai_provider}
+                  value={formData.aiModel}
+                  onValueChange={v => setFormData(f => ({ ...f, aiModel: v }))}
+                  disabled={!formData.aiProvider}
                 >
                   <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
                   <SelectContent>
-                    {(PROVIDER_MODELS[formData.ai_provider] ?? []).map(m => (
+                    {(PROVIDER_MODELS[formData.aiProvider] ?? []).map(m => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -425,18 +424,18 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
 
         {enabledProviders.length === 0 && (
           <div className="rounded-lg border border-dashed border-border p-3 text-center">
-            <p className="text-xs text-muted-foreground">No AI providers connected. Go to <strong>Admin → AI Models</strong> to add a key.</p>
+            <p className="text-xs text-muted-foreground">No AI providers connected. Go to <strong>Admin - AI Models</strong> to add a key.</p>
           </div>
         )}
 
         {/* System Prompt */}
-        {formData.ai_provider && (
+        {formData.aiProvider && (
           <div className="space-y-1.5">
             <Label className="text-xs">System Prompt</Label>
             <Textarea
               placeholder="You are a helpful assistant for [team name]..."
-              value={formData.system_prompt}
-              onChange={e => setFormData(f => ({ ...f, system_prompt: e.target.value }))}
+              value={formData.systemPrompt}
+              onChange={e => setFormData(f => ({ ...f, systemPrompt: e.target.value }))}
               rows={3}
             />
           </div>
@@ -447,7 +446,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
     </DialogContent>
   );
 
-  // ─── Render ─────────────────────────────────────────────────────────────────
+  // Render
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -508,7 +507,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
             </TableHeader>
             <TableBody>
               {filteredAgents.map(agent => {
-                const dept = departments.find(d => d.id === (agent.team?.department_id || agent.department_id));
+                const dept = departments.find(d => d.id === (agent.team?.departmentId || agent.departmentId));
                 return (
                   <TableRow key={agent.id}>
                     <TableCell className="font-medium">
@@ -524,21 +523,21 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {agent.ai_provider && agent.ai_model ? (
+                      {agent.aiProvider && agent.aiModel ? (
                         <div className="text-xs">
-                          <span className="font-medium">{PROVIDER_LABELS[agent.ai_provider] ?? agent.ai_provider}</span>
+                          <span className="font-medium">{PROVIDER_LABELS[agent.aiProvider] ?? agent.aiProvider}</span>
                           <br />
-                          <span className="text-muted-foreground font-mono">{agent.ai_model}</span>
+                          <span className="text-muted-foreground font-mono">{agent.aiModel}</span>
                         </div>
-                      ) : <span className="text-muted-foreground text-xs">—</span>}
+                      ) : <span className="text-muted-foreground text-xs">-</span>}
                     </TableCell>
                     <TableCell><Badge className={getTypeBadgeClass(agent.type)}>{agent.type}</Badge></TableCell>
                     <TableCell><Badge className={getStatusBadgeClass(agent.status)}>{agent.status}</Badge></TableCell>
                     <TableCell>
-                      {dept ? <Badge variant="outline" className="gap-1"><Building className="h-3 w-3" />{dept.name}</Badge> : '—'}
+                      {dept ? <Badge variant="outline" className="gap-1"><Building className="h-3 w-3" />{dept.name}</Badge> : '-'}
                     </TableCell>
                     <TableCell>
-                      {agent.team ? <Badge variant="secondary" className="gap-1"><Users className="h-3 w-3" />{agent.team.name}</Badge> : '—'}
+                      {agent.team ? <Badge variant="secondary" className="gap-1"><Users className="h-3 w-3" />{agent.team.name}</Badge> : '-'}
                     </TableCell>
                     <TableCell>
                       {canManage && (
@@ -600,9 +599,9 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                     {agent.tier || 'functional'}
                   </Badge>
                 </div>
-                {agent.ai_provider && agent.ai_model && (
+                {agent.aiProvider && agent.aiModel && (
                   <div className="text-xs text-muted-foreground font-mono">
-                    {PROVIDER_LABELS[agent.ai_provider] ?? agent.ai_provider} / {agent.ai_model}
+                    {PROVIDER_LABELS[agent.aiProvider] ?? agent.aiProvider} / {agent.aiModel}
                   </div>
                 )}
               </CardContent>

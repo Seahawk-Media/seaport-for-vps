@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useRole } from "@/hooks/useRole";
 import { Save, Upload, X, Palette, ImageIcon } from "lucide-react";
@@ -49,10 +49,11 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
 
   useEffect(() => {
     if (organization) {
-      setPrimaryColor((organization as any).primary_color || '#1a1a1a');
-      setAccentColor((organization as any).accent_color || '#0ea5e9');
-      setLogoUrl((organization as any).logo_url || null);
-      setLogoPreview((organization as any).logo_url || null);
+      const org = organization as { primaryColor?: string; accentColor?: string; logoUrl?: string };
+      setPrimaryColor(org.primaryColor || '#1a1a1a');
+      setAccentColor(org.accentColor || '#0ea5e9');
+      setLogoUrl(org.logoUrl || null);
+      setLogoPreview(org.logoUrl || null);
     }
   }, [organization]);
 
@@ -67,23 +68,10 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
 
     setUploading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const path = `${organization.id}/logo.${ext}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('org-logos')
-        .upload(path, file, { upsert: true });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('org-logos')
-        .getPublicUrl(path);
-
-      setLogoUrl(publicUrl);
-      toast({ title: 'Logo uploaded', description: 'Save to apply.' });
-    } catch (err: any) {
-      toast({ title: 'Upload failed', description: err.message, variant: 'destructive' });
+      // TODO: Implement tRPC file upload route for org logos
+      toast({ title: 'Coming soon', description: 'Logo upload will be available in a future update.' });
+    } catch (err: unknown) {
+      toast({ title: 'Upload failed', description: err instanceof Error ? err.message : 'An unexpected error occurred', variant: 'destructive' });
       setLogoPreview(logoUrl);
     } finally {
       setUploading(false);
@@ -96,29 +84,27 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSave = async () => {
-    if (!organization || !isSuperAdmin()) return;
-    setSaving(true);
-    try {
-      const { error } = await supabase
-        .from('organizations')
-        .update({
-          primary_color: primaryColor,
-          accent_color: accentColor,
-          logo_url: logoUrl,
-          updated_at: new Date().toISOString(),
-        } as any)
-        .eq('id', organization.id);
-
-      if (error) throw error;
+  const updateOrg = trpc.org.update.useMutation({
+    onSuccess: async () => {
       await refetch();
       onBrandingChange?.();
       toast({ title: 'Branding saved', description: 'Your workspace branding has been updated.' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
       setSaving(false);
-    }
+    },
+    onError: (err) => {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      setSaving(false);
+    },
+  });
+
+  const handleSave = async () => {
+    if (!organization || !isSuperAdmin()) return;
+    setSaving(true);
+    updateOrg.mutate({
+      primaryColor,
+      accentColor,
+      logoUrl,
+    });
   };
 
   if (!isSuperAdmin()) return null;
@@ -156,7 +142,7 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
                 disabled={uploading}
               >
                 <Upload className="h-3.5 w-3.5 mr-1.5" />
-                {uploading ? 'Uploading…' : 'Upload'}
+                {uploading ? 'Uploading...' : 'Upload'}
               </Button>
               {logoPreview && (
                 <Button
@@ -267,7 +253,7 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
               <div className="flex-1" style={{ backgroundColor: accentColor }} />
             </div>
             <div className="px-3 py-2 text-xs text-muted-foreground bg-card">
-              Color preview — primary · accent
+              Color preview -- primary · accent
             </div>
           </div>
         </CardContent>
@@ -275,7 +261,7 @@ export const BrandingManagement: React.FC<BrandingManagementProps> = ({ onBrandi
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={saving} size="sm">
-          {saving ? 'Saving…' : (
+          {saving ? 'Saving...' : (
             <>
               <Save className="h-3.5 w-3.5 mr-1.5" />
               Save Branding

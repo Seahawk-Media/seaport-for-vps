@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -8,11 +8,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useRole } from '@/hooks/useRole';
+import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
-import { format, isSameDay, parseISO, startOfMonth, endOfMonth, addMonths, subMonths, isSameMonth, setYear } from 'date-fns';
+import { format, isSameDay, parseISO, isSameMonth } from 'date-fns';
 import { Plus, Calendar as CalendarIcon, Trash2, PartyPopper, Palmtree } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,21 +23,17 @@ interface Holiday {
   name: string;
   date: string;
   description: string | null;
-  is_recurring: boolean;
+  isRecurring: boolean;
   country: string | null;
 }
 
 interface TimeOffEvent {
   id: string;
-  profile_id: string;
-  start_date: string;
-  end_date: string;
-  request_type: string;
+  profileId: string;
+  startDate: string;
+  endDate: string;
+  requestType: string;
   status: string;
-  profile: {
-    full_name: string | null;
-    avatar_url: string | null;
-  };
 }
 
 // Common country list for selection
@@ -57,185 +54,116 @@ const COUNTRIES = [
 export const HolidayCalendar: React.FC = () => {
   const { organization } = useOrganization();
   const { isAdmin, isSuperAdmin } = useRole();
+  const { user } = useAuth();
   const { toast } = useToast();
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [timeOffEvents, setTimeOffEvents] = useState<TimeOffEvent[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
-  const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [userLocation, setUserLocation] = useState<string | null>(null);
   const [newHoliday, setNewHoliday] = useState({
     name: '',
     date: format(new Date(), 'yyyy-MM-dd'),
     description: '',
-    is_recurring: false,
+    isRecurring: false,
     country: '',
   });
 
   const canManageHolidays = isAdmin() || isSuperAdmin();
 
-  // Fetch user's location from their profile
-  const fetchUserLocation = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  // Fetch current user's profile for location
+  const { data: myProfile } = trpc.profiles.me.useQuery();
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('location')
-      .eq('user_id', user.id)
-      .single();
+  const userLocation = useMemo(() => {
+    if (!myProfile?.location) return null;
+    const location = myProfile.location.toUpperCase();
+    const matchedCountry = COUNTRIES.find(c =>
+      c.code && (location.includes(c.code) || location.includes(c.label.toUpperCase()))
+    );
+    return matchedCountry?.code || null;
+  }, [myProfile?.location]);
 
-    if (profile?.location) {
-      // Try to extract country code from location
-      const location = profile.location.toUpperCase();
-      const matchedCountry = COUNTRIES.find(c => 
-        c.code && (location.includes(c.code) || location.includes(c.label.toUpperCase()))
-      );
-      setUserLocation(matchedCountry?.code || null);
-    }
-  };
+  const utils = trpc.useUtils();
 
-  useEffect(() => {
-    fetchUserLocation();
-  }, []);
+  // Fetch holidays
+  const { data: rawHolidays = [] } = trpc.calendar.listHolidays.useQuery(
+    undefined,
+    { enabled: !!organization?.id }
+  );
 
-  const fetchData = async () => {
-    if (!organization?.id) return;
+  // Fetch time off requests
+  const { data: rawTimeOffRequests = [] } = trpc.timeOff.listRequests.useQuery(
+    undefined,
+    { enabled: !!organization?.id }
+  );
 
-    try {
-      const monthStart = startOfMonth(currentMonth);
-      const monthEnd = endOfMonth(currentMonth);
+  // Fetch all profiles for displaying names
+  const { data: allProfiles = [] } = trpc.profiles.list.useQuery();
 
-      // Fetch holidays
-      const { data: holidayData, error: holidayError } = await supabase
-        .from('holidays')
-        .select('*')
-        .eq('organization_id', organization.id)
-        .order('date', { ascending: true });
+  // Filter holidays by user location and current month
+  const holidays: Holiday[] = useMemo(() => {
+    return (rawHolidays as Holiday[]).filter(h => {
+      const isGeneralHoliday = !h.country;
+      const isUserCountryHoliday = userLocation && h.country === userLocation;
+      const countryMatch = isGeneralHoliday || isUserCountryHoliday;
+      if (!countryMatch) return false;
 
-      if (holidayError) throw holidayError;
-      
-      // Filter holidays: show general (country=null) + country-specific matching user's location
-      const filteredHolidays = (holidayData || []).filter(h => {
-        // Filter by country: show general holidays or ones matching user's location
-        const isGeneralHoliday = !h.country;
-        const isUserCountryHoliday = userLocation && h.country === userLocation;
-        const countryMatch = isGeneralHoliday || isUserCountryHoliday;
+      const holidayDate = parseISO(h.date);
+      if (h.isRecurring) return true;
+      return isSameMonth(holidayDate, currentMonth);
+    });
+  }, [rawHolidays, currentMonth, userLocation]);
 
-        if (!countryMatch) return false;
+  // Filter approved time off events
+  const timeOffEvents: (TimeOffEvent & { profile?: { fullName: string; avatarUrl: string | null } })[] = useMemo(() => {
+    return (rawTimeOffRequests as TimeOffEvent[])
+      .filter(r => r.status === 'approved')
+      .map(r => ({
+        ...r,
+        profile: (allProfiles as Array<{ id: string; fullName: string; avatarUrl: string | null }>).find((p) => p.id === r.profileId),
+      }));
+  }, [rawTimeOffRequests, allProfiles]);
 
-        const holidayDate = parseISO(h.date);
-        if (h.is_recurring) {
-          return true;
-        }
-        return isSameMonth(holidayDate, currentMonth);
-      });
-      
-      setHolidays(filteredHolidays);
-
-      // Fetch approved time off requests for the month
-      const { data: timeOffData, error: timeOffError } = await supabase
-        .from('time_off_requests')
-        .select(`
-          id,
-          profile_id,
-          start_date,
-          end_date,
-          request_type,
-          status,
-          profile:profile_id(full_name, avatar_url)
-        `)
-        .eq('organization_id', organization.id)
-        .eq('status', 'approved')
-        .lte('start_date', format(monthEnd, 'yyyy-MM-dd'))
-        .gte('end_date', format(monthStart, 'yyyy-MM-dd'));
-
-      if (timeOffError) throw timeOffError;
-      setTimeOffEvents((timeOffData || []) as unknown as TimeOffEvent[]);
-    } catch (error) {
-      console.error('Error fetching calendar data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [organization?.id, currentMonth, userLocation]);
-
-  const handleAddHoliday = async () => {
-    if (!organization?.id || !newHoliday.name || !newHoliday.date) return;
-
-    try {
-      const { error } = await supabase
-        .from('holidays')
-        .insert({
-          organization_id: organization.id,
-          name: newHoliday.name,
-          date: newHoliday.date,
-          description: newHoliday.description || null,
-          is_recurring: newHoliday.is_recurring,
-          country: newHoliday.country || null,
-        });
-
-      if (error) throw error;
-
-      toast({
-        title: 'Holiday added',
-        description: `${newHoliday.name} has been added to the calendar.`,
-      });
-
+  const createHolidayMutation = trpc.calendar.createHoliday.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Holiday added', description: `${newHoliday.name} has been added to the calendar.` });
       setShowAddDialog(false);
-      setNewHoliday({
-        name: '',
-        date: format(new Date(), 'yyyy-MM-dd'),
-        description: '',
-        is_recurring: false,
-        country: '',
-      });
-      fetchData();
-    } catch (error) {
-      console.error('Error adding holiday:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to add holiday.',
-        variant: 'destructive',
-      });
-    }
+      setNewHoliday({ name: '', date: format(new Date(), 'yyyy-MM-dd'), description: '', isRecurring: false, country: '' });
+      utils.calendar.listHolidays.invalidate();
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to add holiday.', variant: 'destructive' });
+    },
+  });
+
+  const deleteHolidayMutation = trpc.calendar.deleteHoliday.useMutation({
+    onSuccess: () => {
+      toast({ title: 'Holiday deleted', description: 'The holiday has been removed from the calendar.' });
+      utils.calendar.listHolidays.invalidate();
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to delete holiday.', variant: 'destructive' });
+    },
+  });
+
+  const handleAddHoliday = () => {
+    if (!newHoliday.name || !newHoliday.date) return;
+    createHolidayMutation.mutate({
+      name: newHoliday.name,
+      date: newHoliday.date,
+      description: newHoliday.description || undefined,
+      isRecurring: newHoliday.isRecurring,
+      country: newHoliday.country || undefined,
+    });
   };
 
-  const handleDeleteHoliday = async (holidayId: string) => {
-    try {
-      const { error } = await supabase
-        .from('holidays')
-        .delete()
-        .eq('id', holidayId);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Holiday deleted',
-        description: 'The holiday has been removed from the calendar.',
-      });
-
-      fetchData();
-    } catch (error) {
-      console.error('Error deleting holiday:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to delete holiday.',
-        variant: 'destructive',
-      });
-    }
+  const handleDeleteHoliday = (holidayId: string) => {
+    deleteHolidayMutation.mutate({ id: holidayId });
   };
 
   const getHolidaysForDate = (date: Date) => {
     return holidays.filter(h => {
       const holidayDate = parseISO(h.date);
-      if (h.is_recurring) {
-        // Match month and day only
-        return holidayDate.getMonth() === date.getMonth() && 
+      if (h.isRecurring) {
+        return holidayDate.getMonth() === date.getMonth() &&
                holidayDate.getDate() === date.getDate();
       }
       return isSameDay(holidayDate, date);
@@ -244,8 +172,8 @@ export const HolidayCalendar: React.FC = () => {
 
   const getTimeOffsForDate = (date: Date) => {
     return timeOffEvents.filter(t => {
-      const start = parseISO(t.start_date);
-      const end = parseISO(t.end_date);
+      const start = parseISO(t.startDate);
+      const end = parseISO(t.endDate);
       return date >= start && date <= end;
     });
   };
@@ -255,7 +183,6 @@ export const HolidayCalendar: React.FC = () => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
-  // Custom day renderer for the calendar
   const modifiers = {
     holiday: (date: Date) => getHolidaysForDate(date).length > 0,
     timeoff: (date: Date) => getTimeOffsForDate(date).length > 0,
@@ -274,14 +201,6 @@ export const HolidayCalendar: React.FC = () => {
 
   const selectedDateHolidays = selectedDate ? getHolidaysForDate(selectedDate) : [];
   const selectedDateTimeOffs = selectedDate ? getTimeOffsForDate(selectedDate) : [];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -361,8 +280,8 @@ export const HolidayCalendar: React.FC = () => {
                   <div className="flex items-center space-x-2">
                     <Switch
                       id="recurring"
-                      checked={newHoliday.is_recurring}
-                      onCheckedChange={(checked) => setNewHoliday({ ...newHoliday, is_recurring: checked })}
+                      checked={newHoliday.isRecurring}
+                      onCheckedChange={(checked) => setNewHoliday({ ...newHoliday, isRecurring: checked })}
                     />
                     <Label htmlFor="recurring">Recurring annually</Label>
                   </div>
@@ -442,7 +361,7 @@ export const HolidayCalendar: React.FC = () => {
                       Company Holidays
                     </h4>
                     {selectedDateHolidays.map((holiday) => (
-                      <div 
+                      <div
                         key={holiday.id}
                         className="p-3 bg-destructive/10 rounded-lg border border-destructive/20"
                       >
@@ -455,7 +374,7 @@ export const HolidayCalendar: React.FC = () => {
                               </p>
                             )}
                             <div className="flex flex-wrap gap-1 mt-2">
-                              {holiday.is_recurring && (
+                              {holiday.isRecurring && (
                                 <Badge variant="outline" className="text-xs">
                                   Recurring annually
                                 </Badge>
@@ -495,23 +414,23 @@ export const HolidayCalendar: React.FC = () => {
                       Team Members Off
                     </h4>
                     {selectedDateTimeOffs.map((timeoff) => (
-                      <div 
+                      <div
                         key={timeoff.id}
                         className="p-3 bg-primary/5 rounded-lg border border-primary/20"
                       >
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8">
-                            <AvatarImage src={timeoff.profile?.avatar_url || undefined} />
+                            <AvatarImage src={timeoff.profile?.avatarUrl || undefined} />
                             <AvatarFallback className="text-xs">
-                              {getInitials(timeoff.profile?.full_name)}
+                              {getInitials(timeoff.profile?.fullName)}
                             </AvatarFallback>
                           </Avatar>
                           <div>
                             <p className="font-medium text-sm">
-                              {timeoff.profile?.full_name || 'Unknown'}
+                              {timeoff.profile?.fullName || 'Unknown'}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {timeoff.request_type} • {format(parseISO(timeoff.start_date), 'MMM d')} - {format(parseISO(timeoff.end_date), 'MMM d')}
+                              {timeoff.requestType} {'\u2022'} {format(parseISO(timeoff.startDate), 'MMM d')} - {format(parseISO(timeoff.endDate), 'MMM d')}
                             </p>
                           </div>
                         </div>

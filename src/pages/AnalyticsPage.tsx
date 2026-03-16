@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { supabase } from '@/integrations/supabase/client';
+import { trpc } from '@/lib/trpc';
 import { Trophy, Star, Calendar, Clock, TrendingUp, Heart, AlertTriangle } from 'lucide-react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
@@ -16,17 +16,17 @@ import { format } from 'date-fns';
 
 interface ProfileWithStats {
   id: string;
-  full_name: string;
-  avatar_url: string | null;
+  fullName: string;
+  avatarUrl: string | null;
   value: number;
 }
 
 interface UpcomingPromotion {
   id: string;
-  profile_id: string;
-  full_name: string;
-  avatar_url: string | null;
-  next_review_date: string;
+  profileId: string;
+  fullName: string;
+  avatarUrl: string | null;
+  nextReviewDate: string;
 }
 
 export default function AnalyticsPage() {
@@ -34,14 +34,6 @@ export default function AnalyticsPage() {
   const { isAdmin, isSuperAdmin, loading: roleLoading } = useRole();
   const { organization } = useOrganization();
   const navigate = useNavigate();
-  
-  const [topBountyEarners, setTopBountyEarners] = useState<ProfileWithStats[]>([]);
-  const [topPerformers, setTopPerformers] = useState<ProfileWithStats[]>([]);
-  const [lowPerformers, setLowPerformers] = useState<ProfileWithStats[]>([]);
-  const [mostTimeOff, setMostTimeOff] = useState<ProfileWithStats[]>([]);
-  const [mostOvertime, setMostOvertime] = useState<ProfileWithStats[]>([]);
-  const [upcomingPromotions, setUpcomingPromotions] = useState<UpcomingPromotion[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -55,188 +47,136 @@ export default function AnalyticsPage() {
     }
   }, [roleLoading, isAdmin, isSuperAdmin, navigate]);
 
-  useEffect(() => {
-    if (organization?.id) {
-      fetchAnalytics();
-    }
-  }, [organization?.id]);
+  const { data: profiles, isLoading: profilesLoading } = trpc.profiles.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+  const { data: incentives, isLoading: incentivesLoading } = trpc.incentives.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+  const { data: reviews, isLoading: reviewsLoading } = trpc.reviews.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+  const { data: timeOffRequests, isLoading: timeOffLoading } = trpc.timeOff.listRequests.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+  const { data: overtimeEntries, isLoading: overtimeLoading } = trpc.overtime.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
+  const { data: promotions, isLoading: promotionsLoading } = trpc.promotions.list.useQuery(undefined, {
+    enabled: !!organization?.id,
+  });
 
-  const fetchAnalytics = async () => {
-    if (!organization?.id) return;
-    setLoading(true);
+  const loading = profilesLoading || incentivesLoading || reviewsLoading || timeOffLoading || overtimeLoading || promotionsLoading;
 
-    try {
-      // Fetch all profiles first for lookups
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url')
-        .eq('organization_id', organization.id);
+  const profileMap = useMemo(() => {
+    const map: Record<string, any> = {};
+    (profiles ?? []).forEach((p: any) => { map[p.id] = p; });
+    return map;
+  }, [profiles]);
 
-      const profileMap = (profiles || []).reduce((acc: Record<string, any>, p) => {
-        acc[p.id] = p;
-        return acc;
-      }, {});
+  const topBountyEarners = useMemo(() => {
+    const approved = (incentives ?? []).filter((i: any) => i.status === 'approved');
+    const bountyByProfile: Record<string, number> = {};
+    approved.forEach((i: any) => {
+      bountyByProfile[i.profileId] = (bountyByProfile[i.profileId] || 0) + (i.points || 0);
+    });
+    return Object.entries(bountyByProfile)
+      .filter(([pid]) => profileMap[pid])
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([pid, total]) => ({
+        id: pid,
+        fullName: profileMap[pid]?.fullName || 'Unknown',
+        avatarUrl: profileMap[pid]?.avatarUrl,
+        value: total,
+      }));
+  }, [incentives, profileMap]);
 
-      // Fetch top incentive earners (approved incentives)
-      const { data: incentives } = await (supabase
-        .from('incentives' as any)
-        .select('profile_id, points')
-        .eq('organization_id', organization.id)
-        .eq('status', 'approved') as any);
+  const { topPerformers, lowPerformers } = useMemo(() => {
+    const submitted = (reviews ?? []).filter((r: any) => r.status === 'submitted' && r.overallRating != null);
+    const ratingByProfile: Record<string, number[]> = {};
+    submitted.forEach((r: any) => {
+      const pid = r.employeeId;
+      if (!ratingByProfile[pid]) ratingByProfile[pid] = [];
+      ratingByProfile[pid].push(Number(r.overallRating));
+    });
+    const profilesWithRatings = Object.entries(ratingByProfile)
+      .filter(([pid]) => profileMap[pid])
+      .map(([pid, ratings]) => ({
+        pid,
+        avg: ratings.reduce((a, b) => a + b, 0) / ratings.length,
+      }));
+    const top = [...profilesWithRatings].sort((a, b) => b.avg - a.avg).slice(0, 5).map(item => ({
+      id: item.pid,
+      fullName: profileMap[item.pid]?.fullName || 'Unknown',
+      avatarUrl: profileMap[item.pid]?.avatarUrl,
+      value: Math.round(item.avg * 10) / 10,
+    }));
+    const low = [...profilesWithRatings].sort((a, b) => a.avg - b.avg).slice(0, 5).map(item => ({
+      id: item.pid,
+      fullName: profileMap[item.pid]?.fullName || 'Unknown',
+      avatarUrl: profileMap[item.pid]?.avatarUrl,
+      value: Math.round(item.avg * 10) / 10,
+    }));
+    return { topPerformers: top, lowPerformers: low };
+  }, [reviews, profileMap]);
 
-      if (incentives) {
-        const bountyByProfile = (incentives as any[]).reduce((acc: Record<string, number>, b: any) => {
-          acc[b.profile_id] = (acc[b.profile_id] || 0) + (b.points || 0);
-          return acc;
-        }, {});
-        
-        const sorted = Object.entries(bountyByProfile)
-          .filter(([pid]) => profileMap[pid])
-          .sort(([, a], [, b]) => (b as number) - (a as number))
-          .slice(0, 5)
-          .map(([pid, total]) => ({
-            id: pid,
-            full_name: profileMap[pid]?.full_name || 'Unknown',
-            avatar_url: profileMap[pid]?.avatar_url,
-            value: total as number
-          }));
-        setTopBountyEarners(sorted);
-      }
+  const mostTimeOff = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const approved = (timeOffRequests ?? []).filter((t: any) =>
+      t.status === 'approved' && t.startDate >= `${currentYear}-01-01`
+    );
+    const timeOffByProfile: Record<string, number> = {};
+    approved.forEach((t: any) => {
+      timeOffByProfile[t.profileId] = (timeOffByProfile[t.profileId] || 0) + (Number(t.totalDays) || 0);
+    });
+    return Object.entries(timeOffByProfile)
+      .filter(([pid]) => profileMap[pid])
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([pid, total]) => ({
+        id: pid,
+        fullName: profileMap[pid]?.fullName || 'Unknown',
+        avatarUrl: profileMap[pid]?.avatarUrl,
+        value: total,
+      }));
+  }, [timeOffRequests, profileMap]);
 
-      // Fetch performance reviews for top and low performers
-      const { data: reviews } = await supabase
-        .from('performance_reviews')
-        .select('employee_id, overall_rating')
-        .eq('organization_id', organization.id)
-        .eq('status', 'submitted')
-        .not('overall_rating', 'is', null);
+  const mostOvertime = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const approved = (overtimeEntries ?? []).filter((o: any) =>
+      o.status === 'approved' && o.date >= `${currentYear}-01-01`
+    );
+    const overtimeByProfile: Record<string, number> = {};
+    approved.forEach((o: any) => {
+      overtimeByProfile[o.profileId] = (overtimeByProfile[o.profileId] || 0) + (Number(o.hours) || 0);
+    });
+    return Object.entries(overtimeByProfile)
+      .filter(([pid]) => profileMap[pid])
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([pid, total]) => ({
+        id: pid,
+        fullName: profileMap[pid]?.fullName || 'Unknown',
+        avatarUrl: profileMap[pid]?.avatarUrl,
+        value: Math.round(total * 10) / 10,
+      }));
+  }, [overtimeEntries, profileMap]);
 
-      if (reviews) {
-        const ratingByProfile = reviews.reduce((acc: Record<string, { ratings: number[] }>, r) => {
-          const pid = r.employee_id;
-          if (!acc[pid]) {
-            acc[pid] = { ratings: [] };
-          }
-          if (r.overall_rating) {
-            acc[pid].ratings.push(Number(r.overall_rating));
-          }
-          return acc;
-        }, {});
-
-        const profilesWithRatings = Object.entries(ratingByProfile)
-          .filter(([pid]) => profileMap[pid])
-          .map(([pid, data]) => ({
-            pid,
-            avg: data.ratings.reduce((a, b) => a + b, 0) / data.ratings.length
-          }));
-        
-        const topSorted = [...profilesWithRatings]
-          .sort((a, b) => b.avg - a.avg)
-          .slice(0, 5)
-          .map(item => ({
-            id: item.pid,
-            full_name: profileMap[item.pid]?.full_name || 'Unknown',
-            avatar_url: profileMap[item.pid]?.avatar_url,
-            value: Math.round(item.avg * 10) / 10
-          }));
-        setTopPerformers(topSorted);
-
-        const lowSorted = [...profilesWithRatings]
-          .sort((a, b) => a.avg - b.avg)
-          .slice(0, 5)
-          .map(item => ({
-            id: item.pid,
-            full_name: profileMap[item.pid]?.full_name || 'Unknown',
-            avatar_url: profileMap[item.pid]?.avatar_url,
-            value: Math.round(item.avg * 10) / 10
-          }));
-        setLowPerformers(lowSorted);
-      }
-
-      // Fetch time off requests (approved, current year)
-      const currentYear = new Date().getFullYear();
-      const { data: timeOffs } = await supabase
-        .from('time_off_requests')
-        .select('profile_id, total_days')
-        .eq('organization_id', organization.id)
-        .eq('status', 'approved')
-        .gte('start_date', `${currentYear}-01-01`);
-
-      if (timeOffs) {
-        const timeOffByProfile = timeOffs.reduce((acc: Record<string, number>, t) => {
-          acc[t.profile_id] = (acc[t.profile_id] || 0) + (Number(t.total_days) || 0);
-          return acc;
-        }, {});
-
-        const sorted = Object.entries(timeOffByProfile)
-          .filter(([pid]) => profileMap[pid])
-          .sort(([, a], [, b]) => b - a)
-          .slice(0, 5)
-          .map(([pid, total]) => ({
-            id: pid,
-            full_name: profileMap[pid]?.full_name || 'Unknown',
-            avatar_url: profileMap[pid]?.avatar_url,
-            value: total
-          }));
-        setMostTimeOff(sorted);
-      }
-
-      // Fetch overtime entries (approved, current year)
-      const { data: overtimes } = await supabase
-        .from('overtime_entries')
-        .select('profile_id, hours')
-        .eq('organization_id', organization.id)
-        .eq('status', 'approved')
-        .gte('date', `${currentYear}-01-01`);
-
-      if (overtimes) {
-        const overtimeByProfile = overtimes.reduce((acc: Record<string, number>, o) => {
-          acc[o.profile_id] = (acc[o.profile_id] || 0) + (Number(o.hours) || 0);
-          return acc;
-        }, {});
-
-        const sorted = Object.entries(overtimeByProfile)
-          .filter(([pid]) => profileMap[pid])
-          .sort(([, a], [, b]) => b - a)
-          .slice(0, 5)
-          .map(([pid, total]) => ({
-            id: pid,
-            full_name: profileMap[pid]?.full_name || 'Unknown',
-            avatar_url: profileMap[pid]?.avatar_url,
-            value: Math.round(total * 10) / 10
-          }));
-        setMostOvertime(sorted);
-      }
-
-      // Fetch upcoming promotions
-      const today = new Date().toISOString().split('T')[0];
-      const { data: promotionReviews } = await (supabase
-        .from('promotions' as any)
-        .select('id, profile_id, next_review_date')
-        .eq('organization_id', organization.id)
-        .gte('next_review_date', today)
-        .order('next_review_date', { ascending: true })
-        .limit(5) as any);
-
-      if (promotionReviews) {
-        const formatted = (promotionReviews as any[])
-          .filter((a: any) => profileMap[a.profile_id])
-          .map((a: any) => ({
-            id: a.id,
-            profile_id: a.profile_id,
-            full_name: profileMap[a.profile_id]?.full_name || 'Unknown',
-            avatar_url: profileMap[a.profile_id]?.avatar_url,
-            next_review_date: a.next_review_date
-          }));
-        setUpcomingPromotions(formatted);
-      }
-
-    } catch (error) {
-      console.error('Error fetching analytics:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const upcomingPromotions = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return (promotions ?? [])
+      .filter((p: any) => p.nextReviewDate && p.nextReviewDate >= today && profileMap[p.profileId])
+      .sort((a: any, b: any) => a.nextReviewDate.localeCompare(b.nextReviewDate))
+      .slice(0, 5)
+      .map((p: any) => ({
+        id: p.id,
+        profileId: p.profileId,
+        fullName: profileMap[p.profileId]?.fullName || 'Unknown',
+        avatarUrl: profileMap[p.profileId]?.avatarUrl,
+        nextReviewDate: p.nextReviewDate,
+      }));
+  }, [promotions, profileMap]);
 
   const getInitials = (name: string) => name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '??';
 
@@ -263,11 +203,11 @@ export default function AnalyticsPage() {
               <div key={item.id} className="flex items-center gap-3">
                 <span className="text-sm font-medium text-muted-foreground w-5">{index + 1}</span>
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src={item.avatar_url || ''} />
-                  <AvatarFallback className="text-xs">{getInitials(item.full_name)}</AvatarFallback>
+                  <AvatarImage src={item.avatarUrl || ''} />
+                  <AvatarFallback className="text-xs">{getInitials(item.fullName)}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{item.full_name}</p>
+                  <p className="text-sm font-medium truncate">{item.fullName}</p>
                   {maxValue && (
                     <Progress value={(item.value / maxValue) * 100} className="h-1.5 mt-1" />
                   )}
@@ -310,7 +250,7 @@ export default function AnalyticsPage() {
               'pts',
               topBountyEarners[0]?.value
             )}
-            
+
             {renderLeaderboard(
               'Top Performers',
               <Star className="h-4 w-4 text-green-500" />,
@@ -361,14 +301,14 @@ export default function AnalyticsPage() {
                     {upcomingPromotions.map((item) => (
                       <div key={item.id} className="flex items-center gap-3">
                         <Avatar className="h-8 w-8">
-                          <AvatarImage src={item.avatar_url || ''} />
-                          <AvatarFallback className="text-xs">{getInitials(item.full_name)}</AvatarFallback>
+                          <AvatarImage src={item.avatarUrl || ''} />
+                          <AvatarFallback className="text-xs">{getInitials(item.fullName)}</AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{item.full_name}</p>
+                          <p className="text-sm font-medium truncate">{item.fullName}</p>
                         </div>
                         <Badge variant="outline" className="shrink-0">
-                          {format(new Date(item.next_review_date), 'MMM d')}
+                          {format(new Date(item.nextReviewDate), 'MMM d')}
                         </Badge>
                       </div>
                     ))}

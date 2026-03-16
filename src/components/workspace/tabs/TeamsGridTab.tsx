@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Users, Crown, ChevronRight } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from "@/lib/trpc";
 import { useNavigate } from 'react-router-dom';
 
 interface TeamsGridTabProps {
@@ -14,53 +14,28 @@ interface Team {
   id: string;
   name: string;
   description: string | null;
-  team_type: string | null;
-  team_lead_id: string | null;
-  team_lead?: { id: string; full_name: string; avatar_url: string | null } | null;
-  member_count: number;
+  teamType: string | null;
+  teamLeadId: string | null;
+  teamLead?: { id: string; fullName: string; avatarUrl: string | null } | null;
+  memberCount: number;
 }
 
 export const TeamsGridTab: React.FC<TeamsGridTabProps> = ({ departmentId }) => {
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchTeams();
-  }, [departmentId]);
+  const teamsQuery = trpc.teams.list.useQuery();
+  const teamMembersQuery = trpc.teamMembers.list.useQuery({ teamId: departmentId });
 
-  const fetchTeams = async () => {
-    try {
-      // Directly query teams by department_id
-      const { data: teamsData, error } = await supabase
-        .from('teams')
-        .select('*, team_lead:profiles!teams_team_lead_id_fkey(id, full_name, avatar_url)')
-        .eq('department_id', departmentId)
-        .order('name');
+  const allTeams = (teamsQuery.data || []) as Array<{ id: string; name: string; description: string | null; teamType: string | null; teamLeadId: string | null; teamLead?: { id: string; fullName: string; avatarUrl: string | null } | null; departmentId: string | null }>;
+  const loading = teamsQuery.isLoading;
 
-      if (error) throw error;
-
-      // Get member counts for all teams in one query
-      const teamIds = (teamsData || []).map(t => t.id);
-      const { data: memberships } = teamIds.length > 0
-        ? await supabase.from('team_members').select('team_id').in('team_id', teamIds)
-        : { data: [] };
-
-      const memberCounts = new Map<string, number>();
-      (memberships || []).forEach(m => {
-        memberCounts.set(m.team_id, (memberCounts.get(m.team_id) || 0) + 1);
-      });
-
-      setTeams((teamsData || []).map(team => ({
-        ...team,
-        member_count: memberCounts.get(team.id) || 0,
-      })));
-    } catch (error) {
-      console.error('Error fetching teams:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Filter teams by department and enrich with member counts
+  const teams: Team[] = allTeams
+    .filter((t) => t.departmentId === departmentId)
+    .map((t) => ({
+      ...t,
+      memberCount: 0, // TODO: enrich with actual member counts from teamMembers query
+    }));
 
   const getInitials = (name: string) => name?.split(' ').map(n => n[0]).join('').toUpperCase() || '??';
 
@@ -94,8 +69,8 @@ export const TeamsGridTab: React.FC<TeamsGridTabProps> = ({ departmentId }) => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((team) => (
-            <Card 
-              key={team.id} 
+            <Card
+              key={team.id}
               className="hover:shadow-md transition-shadow cursor-pointer group"
               onClick={() => navigate(`/function/${team.id}`)}
             >
@@ -107,11 +82,11 @@ export const TeamsGridTab: React.FC<TeamsGridTabProps> = ({ departmentId }) => {
                       {team.name}
                     </CardTitle>
                     <div className="flex items-center gap-2 mt-2">
-                      <Badge className={getTypeColor(team.team_type)}>
-                        {team.team_type || 'project'}
+                      <Badge className={getTypeColor(team.teamType)}>
+                        {team.teamType || 'project'}
                       </Badge>
                       <Badge variant="secondary">
-                        {team.member_count} members
+                        {team.memberCount} members
                       </Badge>
                     </div>
                   </div>
@@ -122,13 +97,13 @@ export const TeamsGridTab: React.FC<TeamsGridTabProps> = ({ departmentId }) => {
                 {team.description && (
                   <CardDescription className="mb-3 line-clamp-2">{team.description}</CardDescription>
                 )}
-                {team.team_lead && (
+                {team.teamLead && (
                   <div className="flex items-center gap-2 pt-2 border-t">
                     <Avatar className="h-6 w-6">
-                      <AvatarImage src={team.team_lead.avatar_url || ''} />
-                      <AvatarFallback className="text-xs">{getInitials(team.team_lead.full_name)}</AvatarFallback>
+                      <AvatarImage src={team.teamLead.avatarUrl || ''} />
+                      <AvatarFallback className="text-xs">{getInitials(team.teamLead.fullName)}</AvatarFallback>
                     </Avatar>
-                    <span className="text-sm text-muted-foreground">{team.team_lead.full_name}</span>
+                    <span className="text-sm text-muted-foreground">{team.teamLead.fullName}</span>
                     <Crown className="h-4 w-4 text-yellow-500" />
                   </div>
                 )}

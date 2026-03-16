@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Users, Crown, Info, Target, Wrench, CalendarDays, FileText, MessageSquare, Bot, ListTodo } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { trpc } from '@/lib/trpc';
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,19 +24,19 @@ interface Team {
   id: string;
   name: string;
   description: string | null;
-  team_type: string | null;
-  team_lead_id: string | null;
-  slack_channel?: string | null;
-  department_id?: string | null;
+  teamType: string | null;
+  teamLeadId: string | null;
+  slackChannel?: string | null;
+  departmentId?: string | null;
   components?: string | null;
 }
 
 interface Profile {
   id: string;
-  full_name: string;
-  avatar_url: string | null;
+  fullName: string;
+  avatarUrl: string | null;
   email: string | null;
-  job_title: string | null;
+  jobTitle: string | null;
 }
 
 interface TeamMember extends Profile {
@@ -48,84 +48,62 @@ type FunctionTab = 'general' | 'measurables' | 'tools' | 'meetings' | 'sops' | '
 export const TeamPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [team, setTeam] = useState<Team | null>(null);
-  const [teamLead, setTeamLead] = useState<Profile | null>(null);
-  const [members, setMembers] = useState<TeamMember[]>([]);
   const [activeTab, setActiveTab] = useState<FunctionTab>('general');
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   const { isAdmin, isSuperAdmin } = useRole();
   const { user, loading: authLoading } = useAuth();
   const { organization, loading: orgLoading } = useOrganization();
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!authLoading && !user) {
       navigate('/auth');
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    if (id) {
-      fetchTeamData();
-    }
-  }, [id]);
+  const { data: teamData, isLoading: teamLoading, refetch: refetchTeam } = trpc.teams.get.useQuery(
+    { id: id! },
+    { enabled: !!id }
+  );
 
-  const fetchTeamData = async () => {
-    if (!id) return;
-    
-    try {
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .select('*')
-        .eq('id', id)
-        .single();
+  const { data: teamLeadData } = trpc.profiles.get.useQuery(
+    { id: teamData?.teamLeadId! },
+    { enabled: !!teamData?.teamLeadId }
+  );
 
-      if (teamError) throw teamError;
-      setTeam(teamData);
+  const { data: teamMembersData } = trpc.teamMembers.list.useQuery(
+    { teamId: id! },
+    { enabled: !!id }
+  );
 
-      if (teamData.team_lead_id) {
-        const { data: leadData } = await supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, email, job_title')
-          .eq('id', teamData.team_lead_id)
-          .single();
-        setTeamLead(leadData);
-      }
+  const team: Team | null = teamData ? {
+    id: teamData.id,
+    name: teamData.name,
+    description: teamData.description ?? null,
+    teamType: teamData.teamType ?? null,
+    teamLeadId: teamData.teamLeadId ?? null,
+    slackChannel: teamData.slackChannel ?? null,
+    departmentId: teamData.departmentId ?? null,
+    components: teamData.components ?? null,
+  } : null;
 
-      // Fetch team members
-      const { data: teamMembers, error: membersError } = await supabase
-        .from('team_members')
-        .select('profile_id, role')
-        .eq('team_id', id);
+  const teamLead: Profile | null = teamLeadData ? {
+    id: teamLeadData.id,
+    fullName: teamLeadData.fullName || '',
+    avatarUrl: teamLeadData.avatarUrl ?? null,
+    email: teamLeadData.email ?? null,
+    jobTitle: teamLeadData.jobTitle ?? null,
+  } : null;
 
-      if (membersError) throw membersError;
+  const members: TeamMember[] = (teamMembersData || []).map((m: any) => ({
+    id: m.id,
+    fullName: m.fullName || '',
+    avatarUrl: m.avatarUrl ?? null,
+    email: m.email ?? null,
+    jobTitle: m.jobTitle ?? null,
+    role: m.role || 'member',
+  }));
 
-      const profileIds = teamMembers?.map(tm => tm.profile_id) || [];
-      if (profileIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, email, job_title')
-          .in('id', profileIds);
-
-        const membersWithRoles = profiles?.map(p => {
-          const membership = teamMembers?.find(tm => tm.profile_id === p.id);
-          return { ...p, role: membership?.role || 'member' };
-        }) || [];
-
-        setMembers(membersWithRoles);
-      }
-
-    } catch (error) {
-      console.error('Error fetching team:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load function data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = teamLoading;
 
   const getInitials = (name: string) => name?.split(' ').map(n => n[0]).join('').toUpperCase() || '??';
 
@@ -158,12 +136,12 @@ export const TeamPage: React.FC = () => {
     switch (activeTab) {
       case 'general':
         return (
-          <FunctionGeneralInfo 
+          <FunctionGeneralInfo
             teamId={id!}
             team={team}
             teamLead={teamLead}
             memberCount={members.length}
-            onUpdate={fetchTeamData}
+            onUpdate={() => refetchTeam()}
           />
         );
       case 'measurables':
@@ -202,10 +180,10 @@ export const TeamPage: React.FC = () => {
               <div className="flex items-center gap-1">
                 <span>·</span>
                 <Avatar className="h-4 w-4">
-                  <AvatarImage src={teamLead.avatar_url || ''} />
-                  <AvatarFallback className="text-[10px]">{getInitials(teamLead.full_name)}</AvatarFallback>
+                  <AvatarImage src={teamLead.avatarUrl || ''} />
+                  <AvatarFallback className="text-[10px]">{getInitials(teamLead.fullName)}</AvatarFallback>
                 </Avatar>
-                <span>{teamLead.full_name}</span>
+                <span>{teamLead.fullName}</span>
                 <Crown className="h-3 w-3 text-yellow-500" />
               </div>
             )}
@@ -216,8 +194,8 @@ export const TeamPage: React.FC = () => {
   );
 
   return (
-    <DashboardLayout 
-      viewMode="functions" 
+    <DashboardLayout
+      viewMode="functions"
       headerContent={headerContent}
     >
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as FunctionTab)}>
