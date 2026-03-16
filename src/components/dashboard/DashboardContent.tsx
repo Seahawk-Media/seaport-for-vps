@@ -1,0 +1,636 @@
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Spinner } from "@/components/ui/spinner";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Search, Building2, Users, Eye, GitBranch, Crown, Calendar, Clock, Trophy, Heart, TrendingUp, User, ChevronRight, GraduationCap } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { ManagerPerformanceReviewDashboard } from "@/components/performance/ManagerPerformanceReviewDashboard";
+import { AcademyDashboard } from "@/components/academy/AcademyDashboard";
+import { useNavigate } from 'react-router-dom';
+
+interface ProfileWithOrg {
+  id: string;
+  full_name: string;
+  email: string;
+  avatar_url: string | null;
+  status: string | null;
+  location: string | null;
+  manager_id: string | null;
+  manager?: {
+    id: string;
+    full_name: string;
+  } | null;
+  department: {
+    id: string;
+    name: string;
+    parent_department?: {
+      name: string;
+    } | null;
+  } | null;
+  position_role: {
+    id: string;
+    title: string;
+  } | null;
+  user_roles: Array<{
+    role: string;
+  }> | any;
+  team_memberships: Array<{
+    team: {
+      id: string;
+      name: string;
+    };
+    role: string;
+  }>;
+  departmentHeadOf?: Array<{ id: string; name: string; }>;
+  teamLeadOf?: Array<{ id: string; name: string; }>;
+}
+
+interface Department {
+  id: string;
+  name: string;
+  description: string | null;
+  parent_id: string | null;
+  head_id: string | null;
+}
+
+interface Team {
+  id: string;
+  name: string;
+  description: string | null;
+  team_type: string;
+  team_lead_id: string | null;
+}
+
+interface DashboardContentProps {
+  viewMode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy';
+  onEmployeeClick?: (employee: { id: string }) => void;
+}
+
+export const DashboardContent: React.FC<DashboardContentProps> = ({
+  viewMode,
+  onEmployeeClick,
+}) => {
+  const navigate = useNavigate();
+  const [employees, setEmployees] = useState<ProfileWithOrg[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('');
+  const [selectedTeam, setSelectedTeam] = useState<string>('');
+  const { toast } = useToast();
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const [profilesRes, departmentsRes, teamsRes, positionsRes, teamMembersRes] = await Promise.all([
+        supabase.from('profiles').select('*').order('full_name'),
+        supabase.from('departments').select('*').order('name'),
+        supabase.from('teams').select('*').order('name'),
+        supabase.from('position_roles').select('id, title').order('title'),
+        supabase.from('team_members').select('profile_id, team_id, role')
+      ]);
+
+      if (profilesRes.error) throw profilesRes.error;
+      if (departmentsRes.error) throw departmentsRes.error;
+      if (teamsRes.error) throw teamsRes.error;
+      if (positionsRes.error) throw positionsRes.error;
+      if (teamMembersRes.error) throw teamMembersRes.error;
+
+      const departmentsData = departmentsRes.data || [];
+      const teamsData = teamsRes.data || [];
+      const profiles = profilesRes.data || [];
+
+      const deptById = new Map(departmentsData.map(d => [d.id, d]));
+      const deptNameById = new Map(departmentsData.map(d => [d.id, d.name]));
+      const posById = new Map((positionsRes.data || []).map(p => [p.id, p]));
+      const teamById = new Map(teamsData.map(t => [t.id, t]));
+      const profileBasicById = new Map(
+        profiles.map(p => [p.id, { id: p.id, full_name: p.full_name }])
+      );
+
+      const membershipsByProfile = new Map<string, Array<{ team: { id: string; name: string }; role: string }>>();
+      (teamMembersRes.data || []).forEach((tm) => {
+        const team = teamById.get(tm.team_id);
+        if (!team) return;
+        const existing = membershipsByProfile.get(tm.profile_id) || [];
+        existing.push({ team: { id: team.id, name: team.name }, role: tm.role });
+        membershipsByProfile.set(tm.profile_id, existing);
+      });
+
+      const employeesWithRoles = await Promise.all(
+        profiles.map(async (employee) => {
+          const { data: userRoles } = await supabase
+            .from('user_roles')
+            .select('role')
+            .eq('user_id', employee.user_id);
+
+          return {
+            ...employee,
+            user_roles: userRoles || []
+          };
+        })
+      );
+
+      const employeesWithLeadership = employeesWithRoles.map((employee) => {
+        const departmentHeadOf = departmentsData.filter(dept => dept.head_id === employee.id);
+        const teamLeadOf = teamsData.filter(team => team.team_lead_id === employee.id);
+
+        const managerData = employee.manager_id ? (profileBasicById.get(employee.manager_id) || null) : null;
+        const dept = employee.department_id ? deptById.get(employee.department_id) : null;
+        const position = employee.position_id ? posById.get(employee.position_id) : null;
+
+        return {
+          ...employee,
+          manager: managerData,
+          department: dept
+            ? {
+                id: dept.id,
+                name: dept.name,
+                parent_department: dept.parent_id ? { name: deptNameById.get(dept.parent_id) || 'Unknown' } : null
+              }
+            : null,
+          position_role: position ? { id: position.id, title: position.title } : null,
+          team_memberships: membershipsByProfile.get(employee.id) || [],
+          departmentHeadOf,
+          teamLeadOf
+        };
+      }) as ProfileWithOrg[];
+
+      setEmployees(employeesWithLeadership);
+      setDepartments(departmentsData);
+      setTeams(teamsData);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch organizational data",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'active': return 'bg-green-500';
+      case 'inactive': return 'bg-red-500';
+      case 'on_leave': return 'bg-yellow-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const filterEmployees = (employees: ProfileWithOrg[]) => {
+    return employees.filter(employee => {
+      const matchesSearch = searchTerm === '' || 
+        employee.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        employee.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (employee.position_role?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
+
+      if (viewMode === 'departments') {
+        const matchesDepartment = selectedDepartment === 'none' || selectedDepartment === '' || 
+          employee.department?.id === selectedDepartment;
+        return matchesSearch && matchesDepartment;
+      } else if (viewMode === 'functions') {
+        const matchesTeam = selectedTeam === 'none' || selectedTeam === '' || 
+          employee.team_memberships.some(tm => tm.team.id === selectedTeam);
+        return matchesSearch && matchesTeam;
+      } else {
+        return matchesSearch;
+      }
+    });
+  };
+
+  const buildHierarchy = (employees: ProfileWithOrg[]) => {
+    const employeeMap = new Map(employees.map(emp => [emp.id, { ...emp, directReports: [] as ProfileWithOrg[] }]));
+    const topLevel: (ProfileWithOrg & { directReports: ProfileWithOrg[] })[] = [];
+
+    employees.forEach(employee => {
+      const empWithReports = employeeMap.get(employee.id);
+      if (!empWithReports) return;
+
+      if (employee.manager_id && employeeMap.has(employee.manager_id)) {
+        const manager = employeeMap.get(employee.manager_id);
+        manager?.directReports.push(empWithReports);
+      } else {
+        topLevel.push(empWithReports);
+      }
+    });
+
+    return topLevel;
+  };
+
+  const renderHierarchyNode = (employee: ProfileWithOrg & { directReports: ProfileWithOrg[] }, level: number = 0) => {
+    return (
+      <div key={employee.id} className="space-y-2">
+        <Card
+          className="hover:shadow-md transition-shadow cursor-pointer"
+          style={{ marginLeft: `${Math.min(level * 4, 16) * 4}px` }}
+              onClick={() => onEmployeeClick?.({ id: employee.id })}>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Avatar className="h-10 w-10">
+                  <AvatarImage src={employee.avatar_url || ''} />
+                  <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                </Avatar>
+                <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                  {employee.directReports.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      {employee.directReports.length} reports
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
+                {employee.position_role && (
+                  <Badge variant="outline" className="text-xs mt-1">
+                    {employee.position_role.title}
+                  </Badge>
+                )}
+                {employee.department && (
+                  <p className="text-xs text-muted-foreground mt-1">{employee.department.name}</p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        {employee.directReports.length > 0 && (
+          <div className="space-y-2">
+            {employee.directReports
+              .sort((a, b) => a.full_name.localeCompare(b.full_name))
+              .map(report => renderHierarchyNode({ ...report, directReports: [] }, level + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const filteredEmployees = filterEmployees(employees);
+
+  const departmentCards = (() => {
+    const base = departments
+      .map((dept) => {
+        const head = dept.head_id ? employees.find(e => e.id === dept.head_id) : null;
+        const memberCount = employees.filter((e) => e.department?.id === dept.id).length;
+        return {
+          id: dept.id,
+          name: dept.name,
+          description: dept.description,
+          head_id: dept.head_id,
+          head: head ? { id: head.id, full_name: head.full_name, avatar_url: head.avatar_url } : null,
+          memberCount,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return selectedDepartment && selectedDepartment !== 'none'
+      ? base.filter((d) => d.id === selectedDepartment)
+      : base;
+  })();
+
+  const teamSections = (() => {
+    const base = teams
+      .map((team) => ({
+        id: team.id,
+        name: team.name,
+        employees: filteredEmployees.filter((e) => e.team_memberships.some((tm) => tm.team.id === team.id)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const scoped = selectedTeam && selectedTeam !== 'none'
+      ? base.filter((t) => t.id === selectedTeam)
+      : base;
+
+    const noTeams = filteredEmployees.filter((e) => e.team_memberships.length === 0);
+    return { teams: scoped, noTeams };
+  })();
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Spinner />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Departments View */}
+      {viewMode === 'departments' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {departmentCards.map((dept) => (
+            <Card 
+              key={dept.id} 
+              className="hover:shadow-lg transition-all cursor-pointer group"
+              onClick={() => navigate(`/department/${dept.id}`)}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-lg bg-primary/10">
+                      <Building2 className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">{dept.name}</CardTitle>
+                      <Badge variant="secondary" className="mt-1">{dept.memberCount} members</Badge>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {dept.description && (
+                  <p className="text-sm text-muted-foreground line-clamp-2">{dept.description}</p>
+                )}
+                {dept.head && (
+                  <div className="flex items-center gap-2 pt-2 border-t">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={dept.head.avatar_url || ''} />
+                      <AvatarFallback className="text-xs">{getInitials(dept.head.full_name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1">
+                        <Crown className="h-3 w-3 text-yellow-500" />
+                        <span className="text-xs text-muted-foreground">Department Head</span>
+                      </div>
+                      <p className="text-sm font-medium truncate">{dept.head.full_name}</p>
+                    </div>
+                  </div>
+                )}
+                {!dept.head && (
+                  <div className="flex items-center gap-2 pt-2 border-t text-muted-foreground">
+                    <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
+                      <User className="h-4 w-4" />
+                    </div>
+                    <span className="text-sm">No head assigned</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+          {departmentCards.length === 0 && (
+            <div className="col-span-full">
+              <EmptyState icon={Building2} title="No departments yet" description="Create departments in Org settings to organize your team." />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Functions View - Search and Filters */}
+      {viewMode === 'functions' && (
+        <div className="flex flex-col md:flex-row gap-4 mb-6">
+          <div className="flex items-center gap-2 flex-1">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search employees..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <Select value={selectedTeam} onValueChange={setSelectedTeam}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Filter by function" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">All Functions</SelectItem>
+              {teams.map((team) => (
+                <SelectItem key={team.id} value={team.id}>
+                  {team.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Hierarchy/Performance/etc. View - Search */}
+      {(viewMode === 'hierarchy' || viewMode === 'performance') && (
+        <div className="flex items-center gap-2">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search employees..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+      )}
+
+
+      {/* Functions View */}
+      {viewMode === 'functions' && (
+        <div className="space-y-6">
+          {teamSections.teams.map(({ id, name, employees: teamEmployees }) => (
+            <Card key={id}>
+              <CardHeader className="pb-3">
+                <div 
+                  className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 p-2 -m-2 rounded-lg transition-colors group"
+                  onClick={() => navigate(`/function/${id}`)}
+                >
+                  <Users className="h-5 w-5 text-primary" />
+                  <CardTitle className="text-lg">{name}</CardTitle>
+                  <Badge variant="secondary">{teamEmployees.length} members</Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                {teamEmployees.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No members assigned yet.</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {teamEmployees.map((employee) => (
+                      <Card 
+                        key={`${employee.id}-${id}`} 
+                        className="hover:shadow-md transition-shadow cursor-pointer"
+                        onClick={() => onEmployeeClick?.({ id: employee.id })}
+                      >
+                        <CardContent className="p-4">
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <Avatar className="h-12 w-12">
+                                <AvatarImage src={employee.avatar_url || ''} />
+                                <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                              </Avatar>
+                              <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(employee.status || 'active')}`} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                              <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
+                              {employee.position_role && (
+                                <Badge variant="outline" className="text-xs mt-1">
+                                  {employee.position_role.title}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+
+          {(selectedTeam === '' || selectedTeam === 'none') && teamSections.noTeams.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <User className="h-5 w-5 text-muted-foreground" />
+                  <CardTitle className="text-lg">No Functions</CardTitle>
+                  <Badge variant="secondary">{teamSections.noTeams.length} members</Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {teamSections.noTeams.map((employee) => (
+                    <Card
+                      key={`${employee.id}-no-team`}
+                      className="hover:shadow-md transition-shadow cursor-pointer"
+                      onClick={() => onEmployeeClick?.({ id: employee.id })}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-12 w-12">
+                            <AvatarImage src={employee.avatar_url || ''} />
+                            <AvatarFallback>{getInitials(employee.full_name)}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-semibold text-sm truncate">{employee.full_name}</h4>
+                            <p className="text-xs text-muted-foreground truncate">{employee.email}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Hierarchy View */}
+      {viewMode === 'hierarchy' && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <GitBranch className="h-5 w-5 text-primary" />
+              <CardTitle>Organizational Hierarchy</CardTitle>
+              <Badge variant="secondary">{filteredEmployees.length} employees</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {buildHierarchy(filteredEmployees).map(topLevelEmployee => 
+                renderHierarchyNode(topLevelEmployee)
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Performance View */}
+      {viewMode === 'performance' && (
+        <ManagerPerformanceReviewDashboard />
+      )}
+
+      {/* Time Off View */}
+      {viewMode === 'timeoff' && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <Calendar className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Time Off Management</h3>
+              <p className="text-muted-foreground">View and manage employee time off requests, vacation calendar, and PTO balances.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Overtime View */}
+      {viewMode === 'overtime' && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <Clock className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Overtime Tracking</h3>
+              <p className="text-muted-foreground">Monitor overtime hours, approve requests, and track compensation.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bounties View */}
+      {viewMode === 'bounties' && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <Trophy className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Achievement Bounties</h3>
+              <p className="text-muted-foreground">Recognition system for outstanding achievements and milestone rewards.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Core Values View */}
+      {viewMode === 'core-values' && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <Heart className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Core Values</h3>
+              <p className="text-muted-foreground">Track alignment with company values and provide feedback on value-driven behavior.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Growth Journey View */}
+      {viewMode === 'growth-journey' && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <TrendingUp className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Growth Journey</h3>
+              <p className="text-muted-foreground">Monitor employee development, career progression, and skill advancement.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Academy View */}
+      {viewMode === 'academy' && <AcademyDashboard />}
+
+      {/* Empty State */}
+      {filteredEmployees.length === 0 && (viewMode === 'departments' || viewMode === 'functions' || viewMode === 'hierarchy') && (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center">
+              <Eye className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-muted-foreground">No employees found</h3>
+              <p className="text-muted-foreground">Try adjusting your search or filter criteria.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
