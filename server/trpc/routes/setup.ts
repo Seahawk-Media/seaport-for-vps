@@ -78,8 +78,8 @@ export const setupRouter = router({
           assignedBy: userId,
         });
 
-        // Seed default data
-        await seedDefaults(org.id);
+        // Seed default data (pass tx so seeds run inside the transaction)
+        await seedDefaults(org.id, tx);
 
         return { success: true, orgId: org.id, orgSlug: org.slug };
       });

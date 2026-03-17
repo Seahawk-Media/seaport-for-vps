@@ -2,7 +2,9 @@ import { db } from './index';
 import { positionRoles, departments, teams } from './schema/index';
 import { reviewTemplates } from './schema/hr';
 
-export async function seedDefaults(organizationId: string) {
+export async function seedDefaults(organizationId: string, tx?: typeof db) {
+  const conn = tx || db;
+
   // Default position roles
   const defaultPositions = [
     'CEO', 'CTO', 'CFO', 'VP', 'Director', 'Manager',
@@ -10,13 +12,13 @@ export async function seedDefaults(organizationId: string) {
     'Designer', 'Analyst', 'HR Manager', 'Recruiter',
   ];
 
-  await db.insert(positionRoles).values(
+  await conn.insert(positionRoles).values(
     defaultPositions.map((title) => ({ organizationId, title }))
   );
 
   // Default departments
   const deptNames = ['Engineering', 'Marketing', 'Sales', 'HR', 'Finance'];
-  const insertedDepts = await db.insert(departments).values(
+  const insertedDepts = await conn.insert(departments).values(
     deptNames.map((name) => ({ organizationId, name }))
   ).returning();
 
@@ -25,7 +27,7 @@ export async function seedDefaults(organizationId: string) {
   // Default teams (under Engineering)
   if (engDept) {
     const defaultTeams = ['QA Team', 'DevOps Team', 'Product Team', 'Security Team'];
-    await db.insert(teams).values(
+    await conn.insert(teams).values(
       defaultTeams.map((name) => ({
         organizationId,
         departmentId: engDept.id,
@@ -35,7 +37,7 @@ export async function seedDefaults(organizationId: string) {
   }
 
   // Default review template
-  await db.insert(reviewTemplates).values({
+  await conn.insert(reviewTemplates).values({
     organizationId,
     name: 'Standard Performance Review',
     description: 'Default performance review template with 13 criteria',
