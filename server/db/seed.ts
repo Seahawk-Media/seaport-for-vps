@@ -1,5 +1,5 @@
 import { db } from './index';
-import { positionRoles, departments, teams } from './schema/index';
+import { positionRoles, departments } from './schema/index';
 import { reviewTemplates } from './schema/hr';
 
 export async function seedDefaults(organizationId: string, tx?: typeof db) {
@@ -17,24 +17,10 @@ export async function seedDefaults(organizationId: string, tx?: typeof db) {
   );
 
   // Default departments
-  const deptNames = ['Engineering', 'Marketing', 'Sales', 'HR', 'Finance'];
-  const insertedDepts = await conn.insert(departments).values(
+  const deptNames = ['Sales', 'Marketing', 'Operations', 'Legal', 'Finance', 'HR'];
+  await conn.insert(departments).values(
     deptNames.map((name) => ({ organizationId, name }))
-  ).returning();
-
-  const engDept = insertedDepts.find((d) => d.name === 'Engineering');
-
-  // Default teams (under Engineering)
-  if (engDept) {
-    const defaultTeams = ['QA Team', 'DevOps Team', 'Product Team', 'Security Team'];
-    await conn.insert(teams).values(
-      defaultTeams.map((name) => ({
-        organizationId,
-        departmentId: engDept.id,
-        name,
-      }))
-    );
-  }
+  );
 
   // Default review template
   await conn.insert(reviewTemplates).values({

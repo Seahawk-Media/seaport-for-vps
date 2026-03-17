@@ -1,11 +1,24 @@
 import { z } from 'zod';
-import { router, adminProcedure } from '../trpc';
+import { router, adminProcedure, protectedProcedure } from '../trpc';
 import { profiles, userRoles } from '../../db/schema/index';
 import { users } from '../../db/schema/auth';
 import { auth } from '../../auth/index';
 import { eq, and } from 'drizzle-orm';
 
 export const usersRouter = router({
+  myRole: protectedProcedure.query(async ({ ctx }) => {
+    const [r] = await ctx.db
+      .select()
+      .from(userRoles)
+      .where(eq(userRoles.userId, ctx.user.id))
+      .limit(1);
+
+    return {
+      role: (r?.role as string) ?? 'employee',
+      userId: ctx.user.id,
+    };
+  }),
+
   list: adminProcedure.query(async ({ ctx }) => {
     return ctx.db
       .select()
