@@ -30,6 +30,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/drizzle.config.ts ./
 COPY --from=builder /app/server/db/schema ./server/db/schema
+COPY --from=builder /app/start.sh ./
 
 # Create uploads directory owned by app user
 RUN mkdir -p /app/uploads && chown -R seaport:seaport /app
@@ -38,4 +39,4 @@ USER seaport
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "npx drizzle-kit push --force --dialect postgresql --schema ./server/db/schema/index.ts --url \"$DATABASE_URL\" && node dist/server/index.js"]
+CMD ["sh", "./start.sh"]

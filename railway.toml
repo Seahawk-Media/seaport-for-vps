@@ -3,6 +3,6 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "npx drizzle-kit push --force --dialect postgresql --schema ./server/db/schema/index.ts --url \"$DATABASE_URL\" && node dist/server/index.js"
+startCommand = "sh ./start.sh"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
