@@ -38,4 +38,4 @@ USER seaport
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "npx drizzle-kit push --force && node dist/server/index.js"]
+CMD ["sh", "-c", "npx drizzle-kit push --force --dialect postgresql --schema ./server/db/schema/index.ts --url \"$DATABASE_URL\" && node dist/server/index.js"]
