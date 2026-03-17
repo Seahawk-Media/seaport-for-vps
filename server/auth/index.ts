@@ -3,6 +3,8 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { db } from '../db/index';
 
 export const auth = betterAuth({
+  secret: process.env.BETTER_AUTH_SECRET || process.env.SESSION_SECRET,
+  baseURL: process.env.SITE_URL || 'http://localhost:3000',
   database: drizzleAdapter(db, { provider: 'pg' }),
   emailAndPassword: {
     enabled: true,
