@@ -3,6 +3,6 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "node dist/server/index.js"
+startCommand = "npx drizzle-kit push --force && node dist/server/index.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
