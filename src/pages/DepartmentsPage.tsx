@@ -229,48 +229,98 @@ export default function DepartmentsPage() {
                 </Button>
               </div>
 
-              {/* Resource Cards Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {resourceConfig.map(({ key, label, icon: Icon, color, bg }) => {
-                  const items = resources?.[key] || [];
-                  const count = activeCounts?.[key] ?? 0;
-                  return (
-                    <Card key={key} className="flex flex-col">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className={cn("rounded-md p-1.5", bg)}>
-                              <Icon className={cn("h-4 w-4", color)} />
+              {/* Department Pillars */}
+              <div>
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                  Department Pillars
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {resourceConfig.map(({ key, label, icon: Icon, color, bg }) => {
+                    const items = resources?.[key] || [];
+                    const count = activeCounts?.[key] ?? 0;
+                    return (
+                      <Card key={key} className="flex flex-col">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className={cn("rounded-md p-1.5", bg)}>
+                                <Icon className={cn("h-4 w-4", color)} />
+                              </div>
+                              <CardTitle className="text-sm font-semibold">{label}</CardTitle>
                             </div>
-                            <CardTitle className="text-sm font-semibold">{label}</CardTitle>
+                            <Badge variant="outline" className="text-xs">{count}</Badge>
                           </div>
-                          <Badge variant="outline" className="text-xs">{count}</Badge>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="pt-0 flex-1">
-                        {items.length === 0 ? (
-                          <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} yet</p>
-                        ) : (
-                          <ul className="space-y-1.5">
-                            {items.map(item => (
-                              <li key={item.id} className="flex items-center justify-between gap-2">
-                                <span className="text-sm truncate">{item.name}</span>
-                                {item.subtitle && (
-                                  <span className="text-xs text-muted-foreground flex-shrink-0 capitalize">{item.subtitle}</span>
-                                )}
-                              </li>
-                            ))}
-                            {count > 5 && (
-                              <li className="text-xs text-muted-foreground pt-1">
-                                +{count - 5} more
-                              </li>
-                            )}
-                          </ul>
-                        )}
-                      </CardContent>
-                    </Card>
+                        </CardHeader>
+                        <CardContent className="pt-0 flex-1">
+                          {items.length === 0 ? (
+                            <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} yet</p>
+                          ) : (
+                            <ul className="space-y-1.5">
+                              {items.map(item => (
+                                <li key={item.id} className="flex items-center justify-between gap-2">
+                                  <span className="text-sm truncate">{item.name}</span>
+                                  {item.subtitle && (
+                                    <span className="text-xs text-muted-foreground flex-shrink-0 capitalize">{item.subtitle}</span>
+                                  )}
+                                </li>
+                              ))}
+                              {count > 5 && (
+                                <li className="text-xs text-muted-foreground pt-1">
+                                  +{count - 5} more
+                                </li>
+                              )}
+                            </ul>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Functions */}
+              <div>
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                  Functions
+                </h3>
+                {(() => {
+                  const deptTeams = (teamsList || []).filter((t: any) => t.departmentId === activeDeptId);
+                  if (deptTeams.length === 0) {
+                    return (
+                      <Card>
+                        <CardContent className="py-8 text-center">
+                          <p className="text-sm text-muted-foreground">No functions yet. Functions represent sub-teams or functional areas within this department.</p>
+                        </CardContent>
+                      </Card>
+                    );
+                  }
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {deptTeams.map((team: any) => {
+                        const memberCount = (profilesList || []).filter((p: any) => {
+                          const tm = (teamsList || []).find((t: any) => t.id === team.id);
+                          return tm && p.departmentId === activeDeptId;
+                        }).length;
+                        return (
+                          <Card key={team.id}>
+                            <CardHeader className="pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-sm font-semibold">{team.name}</CardTitle>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="pt-0">
+                              {team.description ? (
+                                <p className="text-xs text-muted-foreground">{team.description}</p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground italic">No description</p>
+                              )}
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
                   );
-                })}
+                })()}
               </div>
             </div>
           )}
