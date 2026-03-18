@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Bot, Edit, Trash2, Power, PowerOff, Search, Building, Users, Globe } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
 import { useRole } from "@/hooks/useRole";
@@ -98,6 +99,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
   const [filterFunction, setFilterFunction] = useState('all');
+  const navigate = useNavigate();
   const { toast } = useToast();
   const { isAdmin, isSuperAdmin } = useRole();
   const { organization } = useOrganization();
@@ -509,7 +511,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
               {filteredAgents.map(agent => {
                 const dept = departments.find(d => d.id === (agent.team?.departmentId || agent.departmentId));
                 return (
-                  <TableRow key={agent.id}>
+                  <TableRow key={agent.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/agents/${agent.id}`)}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         <Bot className="h-4 w-4 text-primary" />
@@ -539,7 +541,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                     <TableCell>
                       {agent.team ? <Badge variant="secondary" className="gap-1"><Users className="h-3 w-3" />{agent.team.name}</Badge> : '-'}
                     </TableCell>
-                    <TableCell>
+                    <TableCell onClick={e => e.stopPropagation()}>
                       {canManage && (
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleAgentStatus(agent)}>
@@ -547,7 +549,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                               ? <PowerOff className="h-4 w-4 text-orange-500" />
                               : <Power className="h-4 w-4 text-green-500" />}
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(agent)}>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(`/agents/${agent.id}`)}>
                             <Edit className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(agent.id)}>
@@ -565,7 +567,7 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredAgents.map(agent => (
-            <Card key={agent.id} className="hover:shadow-md transition-shadow">
+            <Card key={agent.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
@@ -573,13 +575,13 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
                     <CardTitle className="text-base">{agent.name}</CardTitle>
                   </div>
                   {canManage && (
-                    <div className="flex gap-1">
+                    <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                       <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleAgentStatus(agent)}>
                         {agent.status === 'active'
                           ? <PowerOff className="h-4 w-4 text-orange-500" />
                           : <Power className="h-4 w-4 text-green-500" />}
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(agent)}>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(`/agents/${agent.id}`)}>
                         <Edit className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(agent.id)}>

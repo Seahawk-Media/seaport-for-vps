@@ -38,6 +38,7 @@ import ManageSOPsPage from "./pages/manage/SOPsPage";
 import ManageMeasurablesPage from "./pages/manage/MeasurablesPage";
 import ManageAgentsPage from "./pages/manage/AgentsPage";
 import AgentChatPage from "./pages/AgentChatPage";
+import AgentDetailPage from "./pages/AgentDetailPage";
 
 // Functions page
 import FunctionsPage from "./pages/FunctionsPage";
@@ -95,6 +96,7 @@ const App = () => (
                 <Route path="/sops" element={<ManageSOPsPage />} />
                 <Route path="/measurables" element={<ManageMeasurablesPage />} />
                 <Route path="/agents" element={<ManageAgentsPage />} />
+                <Route path="/agents/:agentId" element={<AgentDetailPage />} />
                 <Route path="/agents/:agentId/chat" element={<AgentChatPage />} />
 
                 {/* Org section routes */}
