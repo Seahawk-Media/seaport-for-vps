@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { Building2, Users, GitBranch, Heart, User, GraduationCap, Wrench, Video, FileText, Target, BarChart3, Settings, ListTodo, Bot, LayoutDashboard, Grid3X3 } from "lucide-react";
+import { Building2, Users, GitBranch, Heart, User, GraduationCap, Wrench, Video, FileText, Target, Settings, ListTodo, Bot, LayoutDashboard, Grid3X3 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -49,7 +49,6 @@ const orgResourceItems = [
 ];
 
 const adminItems = [
-  { value: "analytics", label: "Analytics", icon: BarChart3, route: "/analytics" },
   { value: "admin", label: "Admin", icon: Settings, route: "/org" },
 ];
 
@@ -82,7 +81,6 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
 
   const isActive = (value: string, route: string | null) => {
     if (value === 'admin') return location.pathname === '/org' || location.pathname === '/admin';
-    if (value === 'analytics') return location.pathname === '/analytics';
     if (value === 'my-journey') return location.pathname.startsWith('/journey/');
     if (route) return location.pathname === route;
     return false;

@@ -25,7 +25,7 @@ import { timeOffRouter } from './routes/time-off';
 import { overtimeRouter } from './routes/overtime';
 import { feedbackRouter } from './routes/feedback';
 import { activityRouter } from './routes/activity';
-import { analyticsRouter } from './routes/analytics';
+
 import { aiConfigRouter } from './routes/ai-config';
 import { agentIdentityRouter } from './routes/agent-identity';
 import { journeyEventTypesRouter } from './routes/journey-event-types';
@@ -57,7 +57,7 @@ export const appRouter = router({
   overtime: overtimeRouter,
   feedback: feedbackRouter,
   activity: activityRouter,
-  analytics: analyticsRouter,
+
   aiConfig: aiConfigRouter,
   agentIdentity: agentIdentityRouter,
   journeyEventTypes: journeyEventTypesRouter,

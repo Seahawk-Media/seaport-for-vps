@@ -33,7 +33,7 @@ import AgentDetailPage from "./pages/AgentDetailPage";
 
 import FunctionsPage from "./pages/FunctionsPage";
 import TasksPage from "./pages/TasksPage";
-import AnalyticsPage from "./pages/AnalyticsPage";
+
 import AcademyPage from "./pages/AcademyPage";
 import CoreValuesPage from "./pages/CoreValuesPage";
 import SSOPage from "./pages/SSOPage";
@@ -88,7 +88,7 @@ const App = () => (
                 <Route path="/settings" element={<UserSettingsPage />} />
                 <Route path="/org" element={<AdminSettingsPage />} />
                 <Route path="/admin" element={<AdminSettingsPage />} />
-                <Route path="/analytics" element={<AnalyticsPage />} />
+
                 <Route path="/journey/:employeeId" element={<EmployeeJourneyPage />} />
                 <Route path="/department/:id" element={<DepartmentPage />} />
                 <Route path="/function/:id" element={<TeamPage />} />
