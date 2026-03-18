@@ -66,6 +66,7 @@ export const orgAiConfig = pgTable('org_ai_config', {
   id: uuid('id').primaryKey().defaultRandom(),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   provider: text('provider').notNull(),
+  apiKeyEncrypted: text('api_key_encrypted'),
   apiKeyHint: text('api_key_hint'),
   isEnabled: boolean('is_enabled').default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

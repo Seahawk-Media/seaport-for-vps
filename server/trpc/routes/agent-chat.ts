@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { router, orgProcedure } from '../trpc';
 import { agentConversations, agentMessages } from '../../db/schema/agents';
 import { eq, and, desc } from 'drizzle-orm';
+import { agentRuntime } from '../../agents/runtime';
 
 export const agentChatRouter = router({
   listConversations: orgProcedure
@@ -62,7 +63,14 @@ export const agentChatRouter = router({
           role: 'user',
           content: input.content,
         }).returning();
-      // Agent response will come via WebSocket
+
+      // Fire-and-forget: trigger agent processing asynchronously.
+      // The response will be persisted and broadcast via WebSocket by the runtime.
+      const conv = conversation[0];
+      agentRuntime
+        .processMessage(conv.agentId, input.conversationId, input.content)
+        .catch((err) => console.error('[AgentRuntime] processMessage error:', err));
+
       return msg;
     }),
 });

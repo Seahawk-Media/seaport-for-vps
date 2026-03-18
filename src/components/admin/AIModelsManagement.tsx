@@ -230,9 +230,8 @@ export const AIModelsManagement: React.FC = () => {
 
   const handleSave = async (provider: string, apiKey: string) => {
     if (!organization) return;
-    const hint = apiKey.slice(-4);
     try {
-      await upsertMutation.mutateAsync({ provider, apiKeyHint: hint, isEnabled: true });
+      await upsertMutation.mutateAsync({ provider, apiKey, isEnabled: true });
       toast({ title: `${provider} connected`, description: 'API key saved. Agents can now use this provider.' });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
