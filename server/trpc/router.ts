@@ -27,6 +27,7 @@ import { feedbackRouter } from './routes/feedback';
 import { activityRouter } from './routes/activity';
 import { analyticsRouter } from './routes/analytics';
 import { aiConfigRouter } from './routes/ai-config';
+import { agentIdentityRouter } from './routes/agent-identity';
 
 export const appRouter = router({
   setup: setupRouter,
@@ -57,6 +58,7 @@ export const appRouter = router({
   activity: activityRouter,
   analytics: analyticsRouter,
   aiConfig: aiConfigRouter,
+  agentIdentity: agentIdentityRouter,
 });
 
 export type AppRouter = typeof appRouter;

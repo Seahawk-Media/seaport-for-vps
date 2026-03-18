@@ -62,6 +62,30 @@ export const agentToolConnections = pgTable('agent_tool_connections', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Agent Memory — OpenClaw-style persistent memory (MEMORY.md equivalent)
+export const agentMemories = pgTable('agent_memories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  category: text('category').default('general'), // 'fact', 'preference', 'context', 'general'
+  content: text('content').notNull(),
+  source: text('source'), // 'conversation', 'manual', 'system'
+  metadata: jsonb('metadata').default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Agent Identity — SOUL.md equivalent
+export const agentIdentity = pgTable('agent_identity', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }).unique(),
+  personality: text('personality'), // SOUL.md personality section
+  communicationStyle: text('communication_style'), // tone, formality
+  values: text('values'), // what the agent cares about
+  guardrails: text('guardrails'), // what the agent must NOT do
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const orgAiConfig = pgTable('org_ai_config', {
   id: uuid('id').primaryKey().defaultRandom(),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),

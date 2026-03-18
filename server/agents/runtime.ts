@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { db } from '../db/index';
-import { agents, agentMessages, agentConversations, orgAiConfig } from '../db/schema/agents';
+import { agents, agentMessages, agentConversations, orgAiConfig, agentIdentity, agentMemories } from '../db/schema/agents';
 import { eq, and, desc } from 'drizzle-orm';
 import { decrypt } from '../lib/crypto';
 import { getAgentContext } from './context';
@@ -116,21 +116,55 @@ export class AgentRuntime {
   private async assembleSystemPrompt(agent: any): Promise<string> {
     const parts: string[] = [];
 
-    // Base identity (SOUL.md equivalent)
-    parts.push(`# Agent Identity`);
+    // ── Layer 1: SOUL.md — Agent Identity ──────────────────────
+    parts.push('# Agent Identity');
     parts.push(`Name: ${agent.name}`);
     if (agent.description) parts.push(`Role: ${agent.description}`);
     parts.push(`Tier: ${agent.tier || 'general'}`);
     parts.push('');
 
-    // User-defined system prompt
+    // Fetch SOUL.md-style identity if exists
+    try {
+      const [identity] = await db
+        .select()
+        .from(agentIdentity)
+        .where(eq(agentIdentity.agentId, agent.id))
+        .limit(1);
+
+      if (identity) {
+        if (identity.personality) {
+          parts.push('## Personality');
+          parts.push(identity.personality);
+          parts.push('');
+        }
+        if (identity.communicationStyle) {
+          parts.push('## Communication Style');
+          parts.push(identity.communicationStyle);
+          parts.push('');
+        }
+        if (identity.values) {
+          parts.push('## Values');
+          parts.push(identity.values);
+          parts.push('');
+        }
+        if (identity.guardrails) {
+          parts.push('## Guardrails');
+          parts.push(identity.guardrails);
+          parts.push('');
+        }
+      }
+    } catch {
+      // Identity fetch failed — continue
+    }
+
+    // ── Layer 2: Instructions (System Prompt) ──────────────────
     if (agent.systemPrompt) {
       parts.push('# Instructions');
       parts.push(agent.systemPrompt);
       parts.push('');
     }
 
-    // Org context injection (like OpenClaw's bootstrap context files)
+    // ── Layer 3: Organization Context ──────────────────────────
     try {
       const context = await getAgentContext(agent.id);
       if (context) {
@@ -161,10 +195,31 @@ export class AgentRuntime {
         parts.push('');
       }
     } catch {
-      // Context fetch failed — continue without it
+      // Context fetch failed — continue
     }
 
-    // Behavioral guardrails
+    // ── Layer 4: Memory (MEMORY.md equivalent) ─────────────────
+    try {
+      const memories = await db
+        .select()
+        .from(agentMemories)
+        .where(eq(agentMemories.agentId, agent.id))
+        .orderBy(desc(agentMemories.createdAt))
+        .limit(20);
+
+      if (memories.length > 0) {
+        parts.push('# Agent Memory');
+        parts.push('The following are facts and context you have learned:');
+        for (const mem of memories) {
+          parts.push(`- [${mem.category}] ${mem.content}`);
+        }
+        parts.push('');
+      }
+    } catch {
+      // Memory fetch failed — continue
+    }
+
+    // ── Layer 5: Behavioral Guidelines ─────────────────────────
     parts.push('# Guidelines');
     parts.push('- You are an AI agent within the Seaport organization platform.');
     parts.push('- Be helpful, concise, and professional.');

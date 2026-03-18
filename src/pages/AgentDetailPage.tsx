@@ -15,7 +15,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Bot, MessageSquare, Settings, Wrench, Sparkles, ArrowLeft,
   Save, Globe, Building, Users, Power, PowerOff, Trash2, Plus,
-  Brain, Cpu, Zap, ChevronRight,
+  Brain, Cpu, Zap, ChevronRight, Heart, Shield, BookOpen,
+  Database, X,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -51,11 +52,13 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 // ─── Sidebar tabs ───────────────────────────────────────────────────
 
-type TabKey = "overview" | "chat" | "tools" | "skills";
+type TabKey = "overview" | "identity" | "chat" | "memory" | "tools" | "skills";
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "overview", label: "Overview", icon: Settings },
+  { key: "identity", label: "Identity", icon: Heart },
   { key: "chat", label: "Chat", icon: MessageSquare },
+  { key: "memory", label: "Memory", icon: Database },
   { key: "tools", label: "Tools", icon: Wrench },
   { key: "skills", label: "Skills", icon: Sparkles },
 ];
@@ -89,6 +92,67 @@ const AgentDetailPage = () => {
   const teams = (teamsQuery.data || []) as { id: string; name: string; departmentId: string | null }[];
   const aiConfigs = (aiConfigQuery.data || []) as { provider: string; isEnabled: boolean }[];
   const enabledProviders = aiConfigs.filter((c) => c.isEnabled);
+
+  // ── Identity (SOUL.md) queries ─────────────────────────────────
+
+  const identityQuery = trpc.agentIdentity.getIdentity.useQuery(
+    { agentId: agentId! },
+    { enabled: !!agentId }
+  );
+
+  const [identityForm, setIdentityForm] = useState({
+    personality: "",
+    communicationStyle: "",
+    values: "",
+    guardrails: "",
+  });
+  const [identityDirty, setIdentityDirty] = useState(false);
+
+  useEffect(() => {
+    if (identityQuery.data) {
+      setIdentityForm({
+        personality: identityQuery.data.personality || "",
+        communicationStyle: identityQuery.data.communicationStyle || "",
+        values: identityQuery.data.values || "",
+        guardrails: identityQuery.data.guardrails || "",
+      });
+      setIdentityDirty(false);
+    }
+  }, [identityQuery.data]);
+
+  const upsertIdentity = trpc.agentIdentity.upsertIdentity.useMutation({
+    onSuccess: () => {
+      toast({ title: "Identity saved" });
+      setIdentityDirty(false);
+      identityQuery.refetch();
+    },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Memory queries ─────────────────────────────────────────────
+
+  const memoriesQuery = trpc.agentIdentity.listMemories.useQuery(
+    { agentId: agentId!, limit: 50 },
+    { enabled: !!agentId }
+  );
+
+  const [newMemory, setNewMemory] = useState("");
+  const [newMemoryCategory, setNewMemoryCategory] = useState("general");
+
+  const addMemory = trpc.agentIdentity.addMemory.useMutation({
+    onSuccess: () => {
+      toast({ title: "Memory added" });
+      setNewMemory("");
+      memoriesQuery.refetch();
+    },
+    onError: (e) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMemory = trpc.agentIdentity.deleteMemory.useMutation({
+    onSuccess: () => {
+      memoriesQuery.refetch();
+    },
+  });
 
   // ── Form state ───────────────────────────────────────────────────
 
@@ -573,11 +637,243 @@ const AgentDetailPage = () => {
     </ScrollArea>
   );
 
+  // ── Tab: Identity (SOUL.md) ────────────────────────────────────
+
+  const renderIdentity = () => (
+    <ScrollArea className="h-full">
+      <div className="p-6 space-y-6 max-w-2xl">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Heart className="h-4 w-4 text-pink-500" />
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Agent Identity
+            </h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Define your agent's personality, tone, values, and guardrails — like OpenClaw's SOUL.md.
+            This shapes how the agent communicates and behaves.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs flex items-center gap-1.5">
+            <BookOpen className="h-3.5 w-3.5" /> Personality
+          </Label>
+          <Textarea
+            value={identityForm.personality}
+            onChange={(e) => {
+              setIdentityForm((f) => ({ ...f, personality: e.target.value }));
+              setIdentityDirty(true);
+            }}
+            rows={4}
+            placeholder="e.g. Friendly and approachable, uses clear language, avoids jargon. Proactive about offering help."
+            disabled={!canManage}
+            className="font-mono text-sm"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs flex items-center gap-1.5">
+            <MessageSquare className="h-3.5 w-3.5" /> Communication Style
+          </Label>
+          <Textarea
+            value={identityForm.communicationStyle}
+            onChange={(e) => {
+              setIdentityForm((f) => ({ ...f, communicationStyle: e.target.value }));
+              setIdentityDirty(true);
+            }}
+            rows={3}
+            placeholder="e.g. Professional but warm. Uses bullet points for lists. Confirms understanding before acting."
+            disabled={!canManage}
+            className="font-mono text-sm"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs flex items-center gap-1.5">
+            <Heart className="h-3.5 w-3.5" /> Values
+          </Label>
+          <Textarea
+            value={identityForm.values}
+            onChange={(e) => {
+              setIdentityForm((f) => ({ ...f, values: e.target.value }));
+              setIdentityDirty(true);
+            }}
+            rows={3}
+            placeholder="e.g. Accuracy over speed. Always cite sources. Prioritize user privacy."
+            disabled={!canManage}
+            className="font-mono text-sm"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs flex items-center gap-1.5">
+            <Shield className="h-3.5 w-3.5 text-destructive" /> Guardrails
+          </Label>
+          <Textarea
+            value={identityForm.guardrails}
+            onChange={(e) => {
+              setIdentityForm((f) => ({ ...f, guardrails: e.target.value }));
+              setIdentityDirty(true);
+            }}
+            rows={3}
+            placeholder="e.g. Never share employee salary data. Always confirm before sending external emails. Don't make up information."
+            disabled={!canManage}
+            className="font-mono text-sm"
+          />
+        </div>
+
+        {canManage && identityDirty && (
+          <Button
+            onClick={() =>
+              upsertIdentity.mutate({
+                agentId: agentId!,
+                ...identityForm,
+              })
+            }
+            disabled={upsertIdentity.isPending}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {upsertIdentity.isPending ? "Saving..." : "Save Identity"}
+          </Button>
+        )}
+
+        <div className="h-8" />
+      </div>
+    </ScrollArea>
+  );
+
+  // ── Tab: Memory ──────────────────────────────────────────────────
+
+  const memories = memoriesQuery.data || [];
+
+  const renderMemory = () => (
+    <ScrollArea className="h-full">
+      <div className="p-6 space-y-6 max-w-2xl">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Database className="h-4 w-4 text-blue-500" />
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Agent Memory
+            </h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Persistent facts and context this agent remembers across conversations — like OpenClaw's MEMORY.md.
+          </p>
+        </div>
+
+        {/* Add memory form */}
+        {canManage && (
+          <Card>
+            <CardContent className="pt-4 space-y-3">
+              <div className="flex gap-2">
+                <Select
+                  value={newMemoryCategory}
+                  onValueChange={setNewMemoryCategory}
+                >
+                  <SelectTrigger className="w-32 h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="general">General</SelectItem>
+                    <SelectItem value="fact">Fact</SelectItem>
+                    <SelectItem value="preference">Preference</SelectItem>
+                    <SelectItem value="context">Context</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={newMemory}
+                  onChange={(e) => setNewMemory(e.target.value)}
+                  placeholder="Add a memory (e.g. 'Our fiscal year starts in April')"
+                  className="flex-1 h-9 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newMemory.trim()) {
+                      addMemory.mutate({
+                        agentId: agentId!,
+                        content: newMemory.trim(),
+                        category: newMemoryCategory,
+                        source: "manual",
+                      });
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  className="h-9"
+                  disabled={!newMemory.trim() || addMemory.isPending}
+                  onClick={() =>
+                    addMemory.mutate({
+                      agentId: agentId!,
+                      content: newMemory.trim(),
+                      category: newMemoryCategory,
+                      source: "manual",
+                    })
+                  }
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Memory list */}
+        {memories.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <Database className="h-10 w-10 mx-auto mb-3 text-muted-foreground/40" />
+              <p className="text-sm font-medium mb-1">No memories yet</p>
+              <p className="text-xs text-muted-foreground">
+                Add facts and context above, or the agent will learn from conversations automatically.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {memories.map((mem: any) => (
+              <div
+                key={mem.id}
+                className="flex items-start gap-3 rounded-lg border p-3 group"
+              >
+                <Badge
+                  variant="outline"
+                  className="text-[10px] mt-0.5 shrink-0 capitalize"
+                >
+                  {mem.category}
+                </Badge>
+                <p className="text-sm flex-1">{mem.content}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-muted-foreground">
+                    {mem.source === "manual" ? "manual" : mem.source}
+                  </span>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => deleteMemory.mutate({ id: mem.id })}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="h-8" />
+      </div>
+    </ScrollArea>
+  );
+
   // ── Content map ──────────────────────────────────────────────────
 
   const tabContent: Record<TabKey, React.ReactNode> = {
     overview: renderOverview(),
+    identity: renderIdentity(),
     chat: renderChat(),
+    memory: renderMemory(),
     tools: renderTools(),
     skills: renderSkills(),
   };
