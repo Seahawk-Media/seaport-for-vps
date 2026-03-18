@@ -16,23 +16,15 @@ interface AddEventModalProps {
   onEventAdded: () => void;
 }
 
-const eventTypes = [
-  { value: "note", label: "Note" },
-  { value: "meeting", label: "Meeting" },
-  { value: "training", label: "Training" },
-  { value: "achievement", label: "Achievement" },
-  { value: "goal", label: "Goal" },
-  { value: "feedback", label: "Feedback" },
-  { value: "document", label: "Document" },
-  { value: "milestone", label: "Milestone" },
-];
-
 export function AddEventModal({ isOpen, onClose, employeeId, onEventAdded }: AddEventModalProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [eventType, setEventType] = useState("");
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Fetch active event types from admin-configured list
+  const { data: eventTypes = [] } = trpc.journeyEventTypes.listActive.useQuery();
 
   const createActivity = trpc.activity.create.useMutation({
     onSuccess: () => {
@@ -88,9 +80,9 @@ export function AddEventModal({ isOpen, onClose, employeeId, onEventAdded }: Add
                 <SelectValue placeholder="Select event type" />
               </SelectTrigger>
               <SelectContent>
-                {eventTypes.map((type) => (
-                  <SelectItem key={type.value} value={type.value}>
-                    {type.label}
+                {eventTypes.map((type: any) => (
+                  <SelectItem key={type.id} value={type.slug}>
+                    {type.name}
                   </SelectItem>
                 ))}
               </SelectContent>

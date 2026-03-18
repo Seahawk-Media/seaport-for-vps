@@ -12,6 +12,7 @@ import { UserManagementSettings } from "./UserManagementSettings";
 import { BusinessAppsManagement } from "./BusinessAppsManagement";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { AIModelsManagement } from "./AIModelsManagement";
+import { JourneyEventTypesManagement } from "./JourneyEventTypesManagement";
 
 export const AdminSettings: React.FC = () => {
   const { isSuperAdmin, isAdmin, loading } = useRole();
@@ -46,7 +47,7 @@ export const AdminSettings: React.FC = () => {
     { value: "departments", label: "Departments" },
     { value: "functions", label: "Functions" },
     { value: "positions", label: "Positions" },
-
+    { value: "journey-events", label: "Journey Events" },
     { value: "activity", label: "Activity" },
   ];
 
@@ -82,8 +83,8 @@ export const AdminSettings: React.FC = () => {
           {activeTab === "departments" && <DepartmentManagement />}
           {activeTab === "functions" && <TeamManagement />}
           {activeTab === "positions" && <PositionManagement />}
-          
-{activeTab === "activity" && <ActivityLogViewer />}
+          {activeTab === "journey-events" && <JourneyEventTypesManagement />}
+          {activeTab === "activity" && <ActivityLogViewer />}
         </div>
       </div>
     </div>
