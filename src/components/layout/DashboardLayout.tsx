@@ -11,7 +11,7 @@ import { useActivityLogger } from '@/hooks/useActivityLogger';
 interface DashboardLayoutProps {
   children: React.ReactNode;
   viewMode?: string;
-  onViewModeChange?: (mode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => void;
+  onViewModeChange?: (mode: 'departments' | 'functions' | 'hierarchy' | 'timeoff' | 'overtime' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => void;
   title?: string;
   description?: string;
   headerContent?: React.ReactNode;
@@ -37,7 +37,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     enabled: !!user,
   });
 
-  const handleViewModeChange = (mode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => {
+  const handleViewModeChange = (mode: 'departments' | 'functions' | 'hierarchy' | 'timeoff' | 'overtime' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy') => {
     if (mode === 'my-journey') {
       if (!user || !profile) return;
       navigate(`/journey/${profile.id}`);

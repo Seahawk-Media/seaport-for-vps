@@ -6,7 +6,7 @@ import { DepartmentManagement } from "./DepartmentManagement";
 import { TeamManagement } from "./TeamManagement";
 import { PositionManagement } from "./PositionManagement";
 import { OrganizationManagement } from "./OrganizationManagement";
-import { BountyTypesManagement } from "./BountyTypesManagement";
+
 import { ActivityLogViewer } from "./ActivityLogViewer";
 import { UserManagementSettings } from "./UserManagementSettings";
 import { BusinessAppsManagement } from "./BusinessAppsManagement";
@@ -46,7 +46,7 @@ export const AdminSettings: React.FC = () => {
     { value: "departments", label: "Departments" },
     { value: "functions", label: "Functions" },
     { value: "positions", label: "Positions" },
-    { value: "bounties", label: "Incentives" },
+
     { value: "activity", label: "Activity" },
   ];
 
@@ -83,8 +83,7 @@ export const AdminSettings: React.FC = () => {
           {activeTab === "functions" && <TeamManagement />}
           {activeTab === "positions" && <PositionManagement />}
           
-          {activeTab === "bounties" && <BountyTypesManagement />}
-          {activeTab === "activity" && <ActivityLogViewer />}
+{activeTab === "activity" && <ActivityLogViewer />}
         </div>
       </div>
     </div>

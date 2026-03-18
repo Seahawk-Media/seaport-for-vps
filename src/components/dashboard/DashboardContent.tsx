@@ -6,9 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Search, Building2, Users, Eye, GitBranch, Crown, Calendar, Clock, Trophy, Heart, TrendingUp, User, ChevronRight, GraduationCap } from "lucide-react";
+import { Search, Building2, Users, Eye, GitBranch, Crown, Calendar, Clock, Heart, TrendingUp, User, ChevronRight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { ManagerPerformanceReviewDashboard } from "@/components/performance/ManagerPerformanceReviewDashboard";
 import { AcademyDashboard } from "@/components/academy/AcademyDashboard";
 import { useNavigate } from 'react-router-dom';
 
@@ -49,7 +48,7 @@ interface ProfileWithOrg {
 }
 
 interface DashboardContentProps {
-  viewMode: 'departments' | 'functions' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy';
+  viewMode: 'departments' | 'functions' | 'hierarchy' | 'timeoff' | 'overtime' | 'core-values' | 'growth-journey' | 'my-journey' | 'academy';
   onEmployeeClick?: (employee: { id: string }) => void;
 }
 
@@ -349,8 +348,8 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
         </div>
       )}
 
-      {/* Hierarchy/Performance/etc. View - Search */}
-      {(viewMode === 'hierarchy' || viewMode === 'performance') && (
+      {/* Hierarchy View - Search */}
+      {viewMode === 'hierarchy' && (
         <div className="flex items-center gap-2">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
@@ -475,11 +474,6 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
         </Card>
       )}
 
-      {/* Performance View */}
-      {viewMode === 'performance' && (
-        <ManagerPerformanceReviewDashboard />
-      )}
-
       {/* Time Off View */}
       {viewMode === 'timeoff' && (
         <Card>
@@ -501,19 +495,6 @@ export const DashboardContent: React.FC<DashboardContentProps> = ({
               <Clock className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
               <h3 className="text-xl font-semibold mb-2">Overtime Tracking</h3>
               <p className="text-muted-foreground">Monitor overtime hours, approve requests, and track compensation.</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Bounties View */}
-      {viewMode === 'bounties' && (
-        <Card>
-          <CardContent className="py-12">
-            <div className="text-center">
-              <Trophy className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-xl font-semibold mb-2">Achievement Bounties</h3>
-              <p className="text-muted-foreground">Recognition system for outstanding achievements and milestone rewards.</p>
             </div>
           </CardContent>
         </Card>

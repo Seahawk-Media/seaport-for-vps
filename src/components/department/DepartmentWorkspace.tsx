@@ -11,11 +11,10 @@ import { ToolsTab } from "@/components/workspace/tabs/ToolsTab";
 import { MeetingsTab } from "@/components/workspace/tabs/MeetingsTab";
 import { SOPsTab } from "@/components/workspace/tabs/SOPsTab";
 import { TasksTab } from "@/components/workspace/tabs/TasksTab";
-import { ChatTab } from "@/components/workspace/tabs/ChatTab";
 import { AgentsTab } from "@/components/workspace/tabs/AgentsTab";
 import { MeasurablesTab } from "@/components/workspace/tabs/MeasurablesTab";
 
-type Tab = 'functions' | 'measurables' | 'tools' | 'meetings' | 'sops' | 'tasks' | 'chat' | 'agents';
+type Tab = 'functions' | 'measurables' | 'tools' | 'meetings' | 'sops' | 'tasks' | 'agents';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'functions',   label: 'Functions'   },
@@ -24,7 +23,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'meetings',    label: 'Meetings'    },
   { id: 'sops',        label: 'SOPs'        },
   { id: 'tasks',       label: 'Tasks'       },
-  { id: 'chat',        label: 'Chat'        },
   { id: 'agents',      label: 'Agents'      },
 ];
 
@@ -78,7 +76,6 @@ export const DepartmentWorkspace: React.FC<DepartmentWorkspaceProps> = ({
       case 'meetings':    return <MeetingsTab departmentId={departmentId} showDeptAll />;
       case 'sops':        return <SOPsTab departmentId={departmentId} showDeptAll />;
       case 'tasks':       return <TasksTab departmentId={departmentId} departmentName={department.name} showDeptAll />;
-      case 'chat':        return <ChatTab departmentId={departmentId} />;
       case 'agents':      return <AgentsTab departmentId={departmentId} showDeptAll />;
       default:            return null;
     }

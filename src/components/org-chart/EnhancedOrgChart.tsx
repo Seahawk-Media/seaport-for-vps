@@ -6,12 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Search, Building2, Users, Settings, Eye, GitBranch, Crown, Calendar, Clock, Trophy, Heart, TrendingUp, User } from "lucide-react";
+import { Search, Building2, Users, Settings, Eye, GitBranch, Crown, Calendar, Clock, Heart, TrendingUp, User } from "lucide-react";
 import { trpc } from '@/lib/trpc';
 import { useRole } from "@/hooks/useRole";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { ManagerPerformanceReviewDashboard } from "@/components/performance/ManagerPerformanceReviewDashboard";
 import { EmployeeJourney } from "@/components/employee-journey/EmployeeJourney";
 import { DepartmentDashboard } from "@/components/department/DepartmentDashboard";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -89,7 +88,7 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [selectedTeam, setSelectedTeam] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'departments' | 'teams' | 'hierarchy' | 'performance' | 'timeoff' | 'overtime' | 'bounties' | 'core-values' | 'growth-journey' | 'my-journey' | 'settings' | 'admin'>('departments');
+  const [viewMode, setViewMode] = useState<'departments' | 'teams' | 'hierarchy' | 'timeoff' | 'overtime' | 'core-values' | 'growth-journey' | 'my-journey' | 'settings' | 'admin'>('departments');
   const [showMyJourney, setShowMyJourney] = useState(false);
   const [currentUserProfileId, setCurrentUserProfileId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<ProfileWithOrg | null>(null);
@@ -208,10 +207,8 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
       case 'departments': return 'Departments';
       case 'teams': return 'Teams';
       case 'hierarchy': return 'Organizational Hierarchy';
-      case 'performance': return 'Performance Dashboard';
       case 'timeoff': return 'Time Off Management';
       case 'overtime': return 'Overtime Tracking';
-      case 'bounties': return 'Achievement Bounties';
       case 'core-values': return 'Core Values';
       case 'growth-journey': return 'Growth Journey';
       case 'my-journey': return 'My Journey';
@@ -224,10 +221,8 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
       case 'departments': return 'Browse by department structure';
       case 'teams': return 'Browse by team composition';
       case 'hierarchy': return 'Browse by reporting hierarchy';
-      case 'performance': return 'View performance insights and analytics';
       case 'timeoff': return 'Manage time off requests and calendar';
       case 'overtime': return 'Track and approve overtime requests';
-      case 'bounties': return 'View and manage achievement bounties';
       case 'core-values': return 'Track core values alignment and feedback';
       case 'growth-journey': return 'Monitor employee growth and development';
       case 'my-journey': return 'Your personal employee journey and achievements';
@@ -445,10 +440,8 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                     {viewMode === 'departments' && 'View your organization by departments'}
                     {viewMode === 'teams' && 'View your organization by teams'}
                     {viewMode === 'hierarchy' && 'View your complete organizational hierarchy'}
-                    {viewMode === 'performance' && 'View performance insights'}
                     {viewMode === 'timeoff' && 'Manage and view time off requests'}
                     {viewMode === 'overtime' && 'Track overtime hours and requests'}
-                    {viewMode === 'bounties' && 'View and manage achievement bounties'}
                     {viewMode === 'core-values' && 'Track core values alignment and feedback'}
                     {viewMode === 'growth-journey' && 'Monitor employee growth and development'}
                   </p>
@@ -463,7 +456,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                       <CardTitle>{getViewModeTitle(viewMode)}</CardTitle>
                       <CardDescription>
                         {getViewModeDescription(viewMode)}
-                        {viewMode === 'bounties' && 'Achievement system for employee recognition'}
                         {viewMode === 'core-values' && 'Core values tracking and feedback'}
                         {viewMode === 'growth-journey' && 'Employee development and career progression'}
                       </CardDescription>
@@ -745,10 +737,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                   )}
 
 
-                  {viewMode === 'performance' && (
-                    <ManagerPerformanceReviewDashboard />
-                  )}
-
                   {viewMode === 'timeoff' && (
                     <div className="text-center py-12">
                       <Calendar className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
@@ -762,14 +750,6 @@ export const EnhancedOrgChart: React.FC<EnhancedOrgChartProps> = ({
                       <Clock className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                       <h3 className="text-xl font-semibold mb-2">Overtime Tracking</h3>
                       <p className="text-muted-foreground">Monitor overtime hours, approve requests, and track compensation.</p>
-                    </div>
-                  )}
-
-                  {viewMode === 'bounties' && (
-                    <div className="text-center py-12">
-                      <Trophy className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                      <h3 className="text-xl font-semibold mb-2">Achievement Bounties</h3>
-                      <p className="text-muted-foreground">Recognition system for outstanding achievements and milestone rewards.</p>
                     </div>
                   )}
 

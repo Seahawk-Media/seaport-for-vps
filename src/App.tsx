@@ -19,19 +19,10 @@ import { EmployeeJourneyPage } from "./pages/EmployeeJourneyPage";
 import DepartmentPage from "./pages/DepartmentPage";
 import DepartmentsPage from "./pages/DepartmentsPage";
 import TeamPage from "./pages/TeamPage";
-import DirectoryPage from "./pages/DirectoryPage";
 import OrgChartPage from "./pages/OrgChartPage";
 
-// Me section pages
-import MePerformancePage from "./pages/me/PerformancePage";
-import MeIncentivesPage from "./pages/me/BountiesPage";
-import MePromotionsPage from "./pages/me/AppraisalPage";
-
-// Manage section pages
+// Team section
 import ManageReportsPage from "./pages/manage/ReportsPage";
-import ManagePerformancePage from "./pages/manage/PerformancePage";
-import ManageIncentivesPage from "./pages/manage/BountiesPage";
-import ManagePromotionsPage from "./pages/manage/AppraisalsPage";
 import ManageToolsPage from "./pages/manage/ToolsPage";
 import ManageMeetingsPage from "./pages/manage/MeetingsPage";
 import ManageSOPsPage from "./pages/manage/SOPsPage";
@@ -40,22 +31,12 @@ import ManageAgentsPage from "./pages/manage/AgentsPage";
 import AgentChatPage from "./pages/AgentChatPage";
 import AgentDetailPage from "./pages/AgentDetailPage";
 
-// Functions page
 import FunctionsPage from "./pages/FunctionsPage";
-
-// Tasks page
 import TasksPage from "./pages/TasksPage";
-
-// Analytics page
 import AnalyticsPage from "./pages/AnalyticsPage";
-
-// Holiday Calendar page
-import HolidayCalendarPage from "./pages/HolidayCalendarPage";
 import AcademyPage from "./pages/AcademyPage";
 import CoreValuesPage from "./pages/CoreValuesPage";
 import SSOPage from "./pages/SSOPage";
-
-// Feedback page
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 
 const App = () => (
@@ -74,41 +55,32 @@ const App = () => (
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/sso" element={<SSOPage />} />
 
-                {/* Me section routes */}
-                <Route path="/me/performance" element={<MePerformancePage />} />
-                <Route path="/me/bounties" element={<MeIncentivesPage />} />
-                <Route path="/me/incentives" element={<MeIncentivesPage />} />
-                <Route path="/me/promotions" element={<MePromotionsPage />} />
-
-                {/* Team section routes */}
+                {/* Team section */}
                 <Route path="/team/trails" element={<ManageReportsPage />} />
-                <Route path="/team/performance" element={<ManagePerformancePage />} />
-                <Route path="/team/bounties" element={<ManageIncentivesPage />} />
-                <Route path="/team/incentives" element={<ManageIncentivesPage />} />
-                <Route path="/team/promotions" element={<ManagePromotionsPage />} />
 
-                {/* Tasks page */}
+                {/* Tasks */}
                 <Route path="/tasks" element={<TasksPage />} />
 
-                {/* Org section routes - resources */}
+                {/* Resources */}
                 <Route path="/tools" element={<ManageToolsPage />} />
                 <Route path="/meetings" element={<ManageMeetingsPage />} />
                 <Route path="/sops" element={<ManageSOPsPage />} />
                 <Route path="/measurables" element={<ManageMeasurablesPage />} />
+
+                {/* Agents */}
                 <Route path="/agents" element={<ManageAgentsPage />} />
                 <Route path="/agents/:agentId" element={<AgentDetailPage />} />
                 <Route path="/agents/:agentId/chat" element={<AgentChatPage />} />
 
-                {/* Org section routes */}
+                {/* Org */}
                 <Route path="/departments" element={<DepartmentsPage />} />
                 <Route path="/functions" element={<FunctionsPage />} />
                 <Route path="/directory" element={<OrgChartPage />} />
                 <Route path="/hierarchy" element={<OrgChartPage />} />
-                <Route path="/holiday-calendar" element={<HolidayCalendarPage />} />
                 <Route path="/core-values" element={<CoreValuesPage />} />
                 <Route path="/academy" element={<AcademyPage />} />
 
-                {/* Other routes */}
+                {/* Auth & settings */}
                 <Route path="/auth" element={<AuthPage />} />
                 <Route path="/accept-invite" element={<AcceptInvitePage />} />
                 <Route path="/accept-invitation" element={<InvitationAcceptance />} />
@@ -121,7 +93,6 @@ const App = () => (
                 <Route path="/department/:id" element={<DepartmentPage />} />
                 <Route path="/function/:id" element={<TeamPage />} />
 
-                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </BrowserRouter>

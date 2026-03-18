@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { Building2, Users, GitBranch, Eye, Trophy, Heart, TrendingUp, User, GraduationCap, Wrench, Video, FileText, Target, BarChart3, Settings, CalendarDays, ListTodo, Bot, LayoutDashboard, Grid3X3 } from "lucide-react";
+import { Building2, Users, GitBranch, Heart, User, GraduationCap, Wrench, Video, FileText, Target, BarChart3, Settings, ListTodo, Bot, LayoutDashboard, Grid3X3 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -25,25 +25,18 @@ interface AppSidebarProps {
   viewMode?: string;
 }
 
+const topItems = [
+  { value: "hierarchy", label: "Org Chart", icon: GitBranch, route: "/hierarchy" },
+  { value: "core-values", label: "Core Values", icon: Heart, route: "/core-values" },
+  { value: "academy", label: "Academy", icon: GraduationCap, route: "/academy" },
+];
+
 const meItems = [
   { value: "my-journey", label: "My Journey", icon: User, route: null },
-  { value: "me-performance", label: "Performance", icon: Eye, route: "/me/performance" },
-  { value: "me-bounties", label: "Incentives", icon: Trophy, route: "/me/incentives" },
-  { value: "me-promotions", label: "Promotions", icon: TrendingUp, route: "/me/promotions" },
 ];
 
 const manageItems = [
   { value: "team-reports", label: "Team Journeys", icon: Users, route: "/team/trails" },
-  { value: "team-performance", label: "Perf Reviews", icon: Eye, route: "/team/performance" },
-  { value: "team-bounties", label: "Incentives", icon: Trophy, route: "/team/incentives" },
-  { value: "team-promotions", label: "Promotions", icon: TrendingUp, route: "/team/promotions" },
-];
-
-const orgPeopleItems = [
-  { value: "hierarchy", label: "Org Chart", icon: GitBranch, route: "/hierarchy" },
-  { value: "holiday-calendar", label: "Event Calendar", icon: CalendarDays, route: "/holiday-calendar" },
-  { value: "core-values", label: "Core Values", icon: Heart, route: "/core-values" },
-  { value: "academy", label: "Academy", icon: GraduationCap, route: "/academy" },
 ];
 
 const orgResourceItems = [
@@ -162,6 +155,7 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
       </SidebarHeader>
 
       <SidebarContent ref={scrollContainerRef} onScroll={handleScroll} className="px-2 py-3 gap-1">
+        {/* Quick access */}
         <SidebarGroup className="space-y-0.5">
           <SidebarGroupContent>
             <SidebarMenu>
@@ -225,7 +219,18 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
+        {/* Org Chart, Core Values, Academy */}
         <SidebarGroup className="space-y-0.5">
+          <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
+            Org
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            {renderNavSection(topItems)}
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Journeys */}
+        <SidebarGroup className="space-y-0.5 mt-3">
           <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
             Me
           </SidebarGroupLabel>
@@ -245,15 +250,7 @@ export function AppSidebar({ viewMode }: AppSidebarProps) {
           </SidebarGroup>
         )}
 
-        <SidebarGroup className="space-y-0.5 mt-3">
-          <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
-            Org
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            {renderNavSection(orgPeopleItems)}
-          </SidebarGroupContent>
-        </SidebarGroup>
-
+        {/* Department resources */}
         <SidebarGroup className="space-y-0.5 mt-3">
           <SidebarGroupLabel className={`text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 mb-0.5 ${collapsed ? "sr-only" : ""}`}>
             Departments

@@ -1,8 +1,8 @@
 import React from 'react';
-import { Users, Wrench, Video, FileText, CheckSquare, MessageSquare, Bot } from "lucide-react";
+import { Users, Wrench, Video, FileText, CheckSquare, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type WorkspaceTab = 'functions' | 'tools' | 'meetings' | 'sops' | 'tasks' | 'chat' | 'agents';
+export type WorkspaceTab = 'functions' | 'tools' | 'meetings' | 'sops' | 'tasks' | 'agents';
 
 interface WorkspaceSidebarProps {
   activeTab: WorkspaceTab;
@@ -16,7 +16,6 @@ const tabs = [
   { id: 'meetings' as WorkspaceTab, label: 'Meetings', icon: Video, departmentOnly: false },
   { id: 'sops' as WorkspaceTab, label: 'SOPs', icon: FileText, departmentOnly: false },
   { id: 'tasks' as WorkspaceTab, label: 'Tasks', icon: CheckSquare, departmentOnly: false },
-  { id: 'chat' as WorkspaceTab, label: 'Chat', icon: MessageSquare, departmentOnly: false },
   { id: 'agents' as WorkspaceTab, label: 'Agents', icon: Bot, departmentOnly: false },
 ];
 
